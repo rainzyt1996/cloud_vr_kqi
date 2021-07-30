@@ -374,8 +374,8 @@ class DataUtils:
         index_df['Label'] = 0
         for i, row in bug_df.iterrows():
             if row['Type'] == 'caton':
-                start_time = row['Start_Timestamp']
-                end_time = row['End_Timestamp']
+                start_time = row['Start_Time']
+                end_time = row['End_Time']
                 index_df.loc[(index_df['T0_Sync'] >= start_time) & (index_df['T0_Sync'] <= end_time), 'Label'] = 1
         if print_on:
             print(index_df)
