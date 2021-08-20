@@ -1,15 +1,16 @@
-# encoding=utf-8
-import logging
-import time
 
+import joblib
+import logging
 # import numpy as np
 import os
 import pandas as pd
-import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import program_logging
 # from sklearn import datasets
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 from sklearn import svm
+from thundersvm import SVC
+import time
 
 
 def example_svm():
@@ -53,8 +54,8 @@ def test_svm():
     path_data = 'data/data_20210723/data_video/data_video_1/data_video_1_1/ap_log_video_1_1/index_label'
     data_df = pd.read_csv(filepath_or_buffer=path_data)
     index_name_list = ['T1_T0_Sync', 'T2_T1_Sync', 'T0_100', 'Length', 'Retry']
-    num_train = int(len(data_df) / 3 * 2)
-    num_test = len(data_df) - num_train
+    num_train = 30000   # int(len(data_df) / 3 * 2)
+    num_test = 20000    # len(data_df) - num_train
     train_features = data_df[index_name_list].values[:num_train, :]
     train_labels = data_df['Label'].values[:num_train]
     test_features = data_df[index_name_list].values[num_train:num_train+num_test, :]
@@ -64,7 +65,7 @@ def test_svm():
 
     logging.info('Start training...')
     time0 = time.time()
-    clf = svm.SVC()
+    clf = SVC()
     clf.fit(train_features, train_labels)
     time_train = time.time() - time0
     logging.info('Train complete. Time cost: %f s', time_train)
@@ -96,7 +97,7 @@ def test_svm():
     file.write('Test data: data_video_1_1[' + str(num_train) + ':' + str(num_train+num_test) + ']\n')
     file.write('Index: ' + ', '.join(index_name_list) + '\n')
     file.write('*** Model ***\n')
-    file.write('Model: svm.SVC()\n')
+    file.write('Model: thundersvm.SVC()\n')
     file.write('*** Train ***\n')
     file.write('Time cost: ' + str(time_train) + ' s\n')
     file.write('*** Predict ***\n')
