@@ -19,11 +19,18 @@ class DataUtils:
 
     def __init__(self):
         self.columnTimestamp = ['Tn', 'Source', 'Destination', 'ID&Fragment', 'Protocol', 'Time_Sync', 'Time_Local']
-        self.columnInfo = ['Source', 'Destination', 'ID', 'Flags', 'Protocol', 'Length']
+        self.columnInfo = ['Source', 'Destination', 'ID&Fragment', 'Protocol', 'Length', 'Retry', 'Sniff_Timestamp']
         self.columnIndex = ['Source', 'Destination', 'ID&Fragment', 'Protocol',
                             'T0_Sync', 'T0_Local', 'T1_Sync', 'T1_Local', 'T2_Sync', 'T2_Local',
-                            'T1_T0_Sync', 'T1_T0_Local', 'T2_T1_Sync', 'T2_T1_Local', 'Retransmission_Times']
-        self.captureFilter = 'ip.dst == 192.168.200.160'
+                            'T1_T0_Sync', 'T1_T0_Local', 'T2_T1_Sync', 'T2_T1_Local', 'T0_100', 'Length', 'Retry']
+        self.captureFilter = 'ip.dst == 192.168.137.160 && tcp'
+
+    def change_unit(self, filepath: str, column: list, coefficient: float):
+        data = pd.read_csv(filepath_or_buffer=filepath)
+        data[column] = data[column] * coefficient
+        output_path, ext = os.path.splitext(filepath)
+        data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
 
     def combine_bug_timestamp(self, path_vtsp: str, path_bm: str, print_on=False, to_csv_on=True):
         """
@@ -47,6 +54,77 @@ class DataUtils:
             output_path = os.path.join(os.path.dirname(path_bm), 'log_bug_timestamp')
             btsp.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return btsp
+
+    def combine_index(self, dir_ap_log: str, dir_pcap: str, print_on=False, to_csv_on=True):
+        """
+        合并ap端log提取指标和空口数据提取指标
+
+        :param dir_ap_log:
+        :param dir_pcap:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Index combine start.')
+        path_ap_index = os.path.join(dir_ap_log, 'index_tall')
+        path_pcap_index = os.path.join(dir_pcap, 'capture_info')
+        ap_index_arr = pd.read_csv(filepath_or_buffer=path_ap_index).values.tolist()
+        pcap_index_df = pd.read_csv(filepath_or_buffer=path_pcap_index)
+        pcap_index_df['Read'] = pcap_index_df['Retry'] * 0
+        pcap_index_df['Index'] = pcap_index_df['Retry'] * 0
+        pcap_index_arr = pcap_index_df.values.tolist()
+
+        nSniffTimestamp = 6
+        nRead = 7
+        nIndex = 8
+        len_ap_index = len(ap_index_arr)
+        len_pcap_index = len(pcap_index_arr)
+
+        column = self.columnIndex
+        obj_curr = [None] * len(column)
+        index_res = [obj_curr]
+
+        start = 0
+        while not (ap_index_arr[0][0:4] == pcap_index_arr[start][0:4]):
+            start += 1
+
+        for i in bar.progressbar(range(0, len_ap_index)):
+            obj_curr[0:15] = ap_index_arr[i][0:15]
+            flag = True
+            for j in range(start, len_pcap_index):
+                if pcap_index_arr[j][nRead] == 0:
+                    if flag:
+                        start = j
+                        flag = False
+                    if ap_index_arr[i][0:4] == pcap_index_arr[j][0:4]:
+                        if not -15 < pcap_index_arr[j][nSniffTimestamp] - ap_index_arr[i][4] < 15:
+                            obj_curr = [None] * len(column)
+                            break
+                        obj_curr[15:17] = pcap_index_arr[j][4:6]
+                        pcap_index_arr[j][nRead] = 1
+                        pcap_index_arr[j][nIndex] = i
+                        dj = 0
+                        while dj < 20:
+                            dj += 1
+                            if pcap_index_arr[j+dj][nRead] == 0 and (ap_index_arr[i][0:4] == pcap_index_arr[j+dj][0:4]):
+                                obj_curr[16] += pcap_index_arr[j+dj][5]
+                                pcap_index_arr[j+dj][nRead] = 1
+                                pcap_index_arr[j+dj][nIndex] = i
+                                j = j + dj
+                                dj = 0
+                        index_res.append(obj_curr)
+                        obj_curr = [None] * len(column)
+                        break
+        index_df = pd.DataFrame(data=index_res, columns=column)
+        pcap_index_df = pd.DataFrame(data=pcap_index_arr)
+
+        if print_on:
+            print(index_df)
+        if to_csv_on:
+            index_df.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index'), index=False, float_format="%.6f")
+            pcap_index_df.to_csv(path_or_buf=os.path.join(dir_pcap, 'capture_info_read'), index=False)
+        logging.info('Index combine complete.')
+        return index_df
 
     def combine_router_timestamp(self, filepath_list: list, print_on=False, to_csv_on=True):
         """
@@ -79,33 +157,77 @@ class DataUtils:
         logging.info('Data merge complete.')
         return log0
 
-    def delete_null_data(self, filepath: str, print_on=False, to_csv_on=True):
+    def delete_null_data(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
         删除空数据所在行
 
-        :param filepath: 文件路径
+        :param data: 数据
         :param print_on: 是否打印结果
         :param to_csv_on: 是否输出csv文件
         :return: 处理后数据
         """
         logging.info('Null data delete start.')
-        data = pd.read_csv(filepath_or_buffer=filepath)
+        # data = pd.read_csv(filepath_or_buffer=filepath)
         null_list = data[data.isna().T.any()].index.tolist()
         data = data.drop(null_list)
         if print_on:
             print(data)
         if to_csv_on:
-            output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_nonnull')
+            # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_nonnull')
             data.to_csv(path_or_buf=output_path, index=False)
         logging.info('Null data delete complete.')
         return data
 
+    def extract_ap_index(self, dir_ap_log: str, print_on=False, to_csv_on=True):
+        """
+        提取AP指标
+
+        :param dir_ap_log:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        path_ap_log = os.path.join(dir_ap_log, 'log_tall')
+
+        rt_tsp = pd.read_csv(filepath_or_buffer=path_ap_log)
+        # 提取指标T1-T0, T2-T1
+        result = self.extract_delta_t(rt_tsp=rt_tsp)
+        # 空值填充处理
+        result = self.fill_null_index(index_df=result)
+        # 删除空数据所在行
+        result = self.delete_null_data(data=result)
+        # 筛选TCP数据
+        result = self.filter(filepath_or_dataframe=result, key='Protocol', value=6)
+        # 提取指标T0_100
+        result = self.extract_t0_100(data=result)
+
+        if print_on:
+            print(result)
+        if to_csv_on:
+            result.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index_tall'), index=False)
+        return result
+
     def extract_capture_info(self, filepath: str, print_on=False, to_csv_on=True):
+        """
+        提取抓包信息
+
+        :param filepath:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
         # logging.info('Capture info extract start.')
+        column = self.columnInfo
         capture = self.import_capture(filepath=filepath, keep_packets=False)
         pgb = bar.ProgressBar()
         info_list = []
         i = [0]
+
+        def ip2int(ip: str):
+            return sum([256 ** m * int(n) for m, n in enumerate(ip.split('.')[::1])])
+
+        def combine_id_flags(ipid: str, flags: str):
+            return '0x' + ipid[-4:] + flags[-2:] + flags[-4:-2]
 
         def get_packet_info(packet):
             if 'wlan_aggregate' in dir(packet):
@@ -117,27 +239,30 @@ class DataUtils:
                     logging.error('wlan_aggregate error: %d', i[0])
                     return
                 for subframe in a_msdu_subframe:
-                    info = [subframe['ip']['ip.src'],
-                            subframe['ip']['ip.dst'],
-                            subframe['ip']['ip.id'],
-                            subframe['ip']['ip.flags'],
-                            subframe['ip']['ip.proto']]
-                    info_list.append(info)
-                    i[0] += 1
-                    pgb.update(i[0])
+                    if 'ip' in subframe:
+                        info = [ip2int(subframe['ip']['ip.src']),
+                                ip2int(subframe['ip']['ip.dst']),
+                                combine_id_flags(subframe['ip']['ip.id'], subframe['ip']['ip.flags']),
+                                subframe['ip']['ip.proto'],
+                                subframe['wlan_aggregate.a_mdsu.length'],
+                                packet.wlan.fc_tree.flags_tree.retry,
+                                packet.sniff_timestamp]
+                        info_list.append(info)
+            i[0] += 1
+            pgb.update(i[0])
 
         capture.apply_on_packets(get_packet_info)
         if print_on:
             print(info_list)
         if to_csv_on:
-            info_df = pd.DataFrame(data=info_list, columns=self.columnInfo)
+            info_df = pd.DataFrame(data=info_list, columns=column)
             info_df.to_csv(path_or_buf=os.path.join(os.path.dirname(filepath), 'capture_info'), index=False)
         # logging.info('Capture info extract complete.')
         return info_list
 
-    def extract_index(self, rt_tsp: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
+    def extract_delta_t(self, rt_tsp: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
-        提取指标
+        提取指标：T1-T0, T2-T1
 
         :param rt_tsp: 路由器时间戳数据
         :param output_path: 输出csv文件路径
@@ -146,7 +271,7 @@ class DataUtils:
         :return: 指标列表
         """
         logging.info('Index extract start.')
-        column = self.columnIndex
+        column = self.columnIndex[0:14]
         obj_curr = [None] * len(column)
         index_res = [obj_curr]
         len_log = len(rt_tsp)
@@ -189,10 +314,10 @@ class DataUtils:
                                 # num_read[0] = num_read[0] + 1
                                 # logging.info('Index extracting ... (%d/%d)', num_read[0], len_log)
                             elif obj_curr[6:8] != [None] * 2 and obj_curr[8:10] == [None] * 2:
-                                if obj_curr[14] is None:
-                                    obj_curr[14] = 1
-                                else:
-                                    obj_curr[14] = obj_curr[14] + 1
+                                # if obj_curr[14] is None:
+                                #     obj_curr[14] = 1
+                                # else:
+                                #     obj_curr[14] = obj_curr[14] + 1
                                 log_arr[idx_cal, 7] = 1
                                 # num_read[0] = num_read[0] + 1
                                 # logging.info('Index extracting ... (%d/%d)', num_read[0], len_log)
@@ -237,7 +362,7 @@ class DataUtils:
                 obj_curr[1] = log_arr[idx_ex, 2]
                 obj_curr[2] = log_arr[idx_ex, 3]
                 obj_curr[3] = log_arr[idx_ex, 4]
-                obj_curr[14] = 0
+                # obj_curr[14] = 0
                 # 计算当前log数据标识项对应指标
                 log_statistics(idx_start=idx_ex)
                 obj_curr = index_calculate(obj_curr)
@@ -251,24 +376,52 @@ class DataUtils:
             print(index_df)
         if to_csv_on:
             if output_path is None:
-                logging.error('Invalid parameter: extract_index->output_filepath=None')
+                logging.error('Invalid parameter: extract_delta_t->output_filepath=None')
             else:
                 index_df.to_csv(path_or_buf=output_path, index=False)
         logging.info('Index extract complete.')
         return index_df
 
-    def fill_null_index(self, filepath: str, print_on=False, to_csv_on=True):
+    def extract_t0_100(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
+        """
+        提取指标T1_100
+
+        :param data:
+        :param output_path:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        column = self.columnIndex[0:15]
+        column_name = self.columnIndex[14]
+        data[column_name] = data['T0_Sync'] * 0
+        len_data = len(data)
+        data_arr = data.values
+
+        for i in range(100, len_data):
+            data_arr[i, 14] = data_arr[i, 4] - data_arr[i - 100, 4]
+        data_arr = np.delete(arr=data_arr, obj=np.s_[0:100], axis=0)
+        data = pd.DataFrame(data=data_arr, columns=column)
+
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    def fill_null_index(self, index_df: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
         空值填充处理
 
-        :param filepath: 指标数据文件路径
+        :param index_df: 指标数据文件路径
+        :param output_path: 保存路径
         :param print_on: 是否打印结果
         :param to_csv_on: 是否输出csv文件
         :return: 处理后数据
         """
         logging.info('Index null fill start.')
-        column = self.columnIndex
-        index_df = pd.read_csv(filepath_or_buffer=filepath)
+        column = self.columnIndex[0:14]
+        # index_df = pd.read_csv(filepath_or_buffer=filepath)
         len_index = len(index_df)
         index_arr = index_df.values
         # 处理T0空值
@@ -285,18 +438,18 @@ class DataUtils:
                     index_arr[i - 1 + k, 5] = np.around((index_arr[i - 2 + k, 5] + index_arr[i - 1 + k, 7]) / 2, 6)
                     index_arr[i - 1 + k, 10] = np.around(index_arr[i - 1 + k, 6] - index_arr[i - 1 + k, 4], 6)
                     index_arr[i - 1 + k, 11] = np.around(index_arr[i - 1 + k, 7] - index_arr[i - 1 + k, 5], 6)
-            if pd.isna(index_arr[i, 14]):
-                index_arr[i, 14] = 0
+            # if pd.isna(index_arr[i, 14]):
+            #     index_arr[i, 14] = 0
         index_fill_df = pd.DataFrame(data=index_arr, columns=column)
         if print_on:
             print(index_fill_df)
         if to_csv_on:
-            output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_fill')
+            # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_fill')
             index_fill_df.to_csv(path_or_buf=output_path, index=False)
         logging.info('Index null fill complete.')
         return index_fill_df
 
-    def filter(self, filepath_or_dataframe, key: str, value, print_on=False, to_csv_on=True, savepath='./data_filter'):
+    def filter(self, filepath_or_dataframe, key: str, value, output_path=None, print_on=False, to_csv_on=False):
         """
         筛选某一属性为特定值的数据
 
@@ -323,7 +476,7 @@ class DataUtils:
         if print_on:
             print(data)
         if to_csv_on:
-            data.to_csv(path_or_buf=savepath, index=False)
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return data
 
     def import_capture(self, filepath: str, only_summaries=False, keep_packets=True, use_json=True):
@@ -376,7 +529,13 @@ class DataUtils:
             if row['Type'] == 'caton':
                 start_time = row['Start_Time']
                 end_time = row['End_Time']
-                index_df.loc[(index_df['T0_Sync'] >= start_time) & (index_df['T0_Sync'] <= end_time), 'Label'] = 1
+                index_df.loc[((index_df['T1_Sync'] + index_df['T2_Sync']) / 2 >= start_time) & (
+                            (index_df['T1_Sync'] + index_df['T2_Sync']) / 2 <= end_time), 'Label'] = 1
+            elif row['Type'] == 'whole':
+                start_time = row['Start_Time']
+                end_time = row['End_Time']
+                index_df = index_df[((index_df['T1_Sync'] + index_df['T2_Sync']) / 2 >= start_time) & (
+                            (index_df['T1_Sync'] + index_df['T2_Sync']) / 2 <= end_time)]
         if print_on:
             print(index_df)
         if to_csv_on:

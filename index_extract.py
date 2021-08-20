@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 # Software: PyCharm
-# File: extract_index.py
+# File: index_extract.py
 # Time: 2021/05
 # Author: Zhu Yutao
 # Description: 指标提取
@@ -118,7 +118,7 @@ def index_extract(log_df: pd.DataFrame, output_filepath=None, print_on=False, to
         print(index_df)
     if to_csv_on:
         if output_filepath is None:
-            logging.error('Invalid parameter: extract_index->output_filepath=None')
+            logging.error('Invalid parameter: index_extract->output_filepath=None')
         else:
             index_df.to_csv(path_or_buf=output_filepath, index=False)
     logging.info('Index extract complete.')
@@ -239,7 +239,7 @@ def index_extract2(log_df: pd.DataFrame, output_filepath=None, print_on=False, t
         print(index_df)
     if to_csv_on:
         if output_filepath is None:
-            logging.error('Invalid parameter: extract_index->output_filepath=None')
+            logging.error('Invalid parameter: index_extract->output_filepath=None')
         else:
             index_df.to_csv(path_or_buf=output_filepath, index=False)
     logging.info('Index extract complete.')
@@ -365,7 +365,7 @@ def index_extract3(log_df: pd.DataFrame, output_filepath=None, print_on=False, t
         print(index_df)
     if to_csv_on:
         if output_filepath is None:
-            logging.error('Invalid parameter: extract_index->output_filepath=None')
+            logging.error('Invalid parameter: index_extract->output_filepath=None')
         else:
             index_df.to_csv(path_or_buf=output_filepath, index=False)
     logging.info('Index extract complete.')
