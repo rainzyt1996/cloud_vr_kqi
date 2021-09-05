@@ -1,3 +1,4 @@
+import copy
 
 import joblib
 import logging
@@ -6,9 +7,10 @@ import os
 import pandas as pd
 import program_logging
 # from sklearn import datasets
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
 from sklearn import svm
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 from thundersvm import SVC
 import time
 
@@ -49,58 +51,94 @@ def example_svm():
     print("The accuracy score is %f" % score)
 
 
-def test_svm():
+def test_svm(test_index: str):
+    # 创建log路径
+    time_log = time.localtime()
+    dir_log = 'train/7_t2_t0_test/only_t2_t0/' + time.strftime("%Y%m%d%H%M%S", time_log)
+    os.mkdir(dir_log)
+    dir_result = dir_log + '/result_predict'
+    os.mkdir(dir_result)
+
+    # 导入数据集
     logging.info('Preparing datasets...')
-    path_data = 'data/data_20210723/data_video/data_video_1/data_video_1_1/ap_log_video_1_1/index_label'
+    path_data = 'data/data_20210723/data_video/data_video_1/data_video_1_1/ap_log_video_1_1/index_label_simple_test'
     data_df = pd.read_csv(filepath_or_buffer=path_data)
-    index_name_list = ['T1_T0_Sync', 'T2_T1_Sync', 'T0_100', 'Length', 'Retry']
-    num_train = 30000   # int(len(data_df) / 3 * 2)
-    num_test = 20000    # len(data_df) - num_train
-    train_features = data_df[index_name_list].values[:num_train, :]
-    train_labels = data_df['Label'].values[:num_train]
-    test_features = data_df[index_name_list].values[num_train:num_train+num_test, :]
-    test_labels = data_df['Label'].values[num_train:num_train+num_test]
+    index_name_list = ['T2_T0_Sync', test_index, 'Length', 'Retry']     # 'T1_T0_Sync', 'T2_T1_Sync', 'T0_100', 'Length', 'Retry'
+    num_train = int(len(data_df) / 3 * 2)
+    num_test = len(data_df) - num_train
+    train_features = data_df.loc[:, index_name_list].values[:num_train, :]
+    train_labels = data_df.loc[:, 'Label'].values[:num_train]
+    test_features = data_df.loc[:, index_name_list].values[num_train:num_train+num_test, :]
+    test_labels = data_df.loc[:, 'Label'].values[num_train:num_train+num_test]
     logging.info('Train data number: %d', num_train)
     logging.info('Test data number: %d', num_test)
+    logging.info('Index list: ' + ', '.join(index_name_list))
 
-    logging.info('Start training...')
-    time0 = time.time()
-    clf = SVC()
-    clf.fit(train_features, train_labels)
-    time_train = time.time() - time0
-    logging.info('Train complete. Time cost: %f s', time_train)
+    # 数据预处理
+    scaler = MinMaxScaler()
+    train_features = scaler.fit_transform(train_features)
+    test_features = scaler.fit_transform(test_features)
 
-    # logging.info('Loading model...')
-    # clf = joblib.load('train/20210820011346/model.pickle')
+    # 配置训练参数
+    kernel = 'rbf'   # linear, polynomial, rbf, sigmoid
+    param_c = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]      # 1.0   [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+    param_gamma = [0.001, 0.01, 0.1, 0.5, 1.0]     # 'auto'    [0.001, 0.01, 0.1, 0.5, 1.0, 10.0]
+    param_degree = [3]      # 3 [1, 3, 5, 7, 9]
 
-    logging.info('Start predicting...')
-    time0 = time.time()
-    test_predict = clf.predict(test_features)
-    time_predict = time.time() - time0
-    logging.info('Predict complete. Time cost: %f s', time_predict)
-
-    score = accuracy_score(test_labels, test_predict)
-    logging.info('The accuracy score is %f', score)
-
-    logging.info('Saving model and log...')
-    time_log = time.localtime()
-    dir_log = 'train/' + time.strftime("%Y%m%d%H%M%S", time_log)
-    os.mkdir(dir_log)
-    joblib.dump(clf, dir_log + '/model.pickle')
+    # 保存训练log
     path_log = dir_log + '/train_log.txt'
     file = open(path_log, 'w')
     file.write('****** Train Log ******\n')
-    file.write('Record time: ' + time.strftime("%Y-%m-%d %H:%M:%S", time_log) + '\n')
+    file.write('[Record time] ' + time.strftime("%Y-%m-%d %H:%M:%S", time_log) + '\n')
     file.write('*** Dataset ***\n')
-    file.write('Dataset: data/data_20210723/data_video/data_video_1/data_video_1_1\n')
-    file.write('Train data: data_video_1_1[0:' + str(num_train) + ']\n')
-    file.write('Test data: data_video_1_1[' + str(num_train) + ':' + str(num_train+num_test) + ']\n')
-    file.write('Index: ' + ', '.join(index_name_list) + '\n')
+    file.write('[Dataset] data/data_20210723/data_video/data_video_1/data_video_1_1\n')
+    file.write('[Train data] data_video_1_1[0:' + str(num_train) + ']\n')
+    file.write('[Test data] data_video_1_1[' + str(num_train) + ':' + str(num_train+num_test) + ']\n')
+    file.write('[Index] ' + ', '.join(index_name_list) + '\n')
+    file.write('[Preprocessing] MinMaxScaler\n')
     file.write('*** Model ***\n')
-    file.write('Model: thundersvm.SVC()\n')
-    file.write('*** Train ***\n')
-    file.write('Time cost: ' + str(time_train) + ' s\n')
-    file.write('*** Predict ***\n')
-    file.write('Time cost: ' + str(time_predict) + ' s\n')
-    file.write('Accuracy score: ' + str(score) + '\n')
+    file.write('[Model] thundersvm.SVC()\n')
+    file.write('[Parameter] \n')
+    file.write('- kernel: ' + kernel + '\n')
+    file.write('- C: ' + ', '.join([str(x) for x in param_c]) + '\n')
+    file.write('- gamma: ' + ', '.join([str(x) for x in param_gamma]) + '\n')
+    file.write('- degree: ' + ', '.join([str(x) for x in param_degree]) + '\n')
     file.close()
+
+    # 开始训练，保存训练结果
+    logging.info('Start training...')
+    path_log = dir_log + '/result_log.csv'
+    column = ['kernel', 'c', 'gamma', 'degree', 'Time_Train', 'Time_Predict', 'Accuracy', 'Precision', 'Recall', 'F1']
+    result_info = []
+    for c in param_c:
+        for gamma in param_gamma:
+            for degree in param_degree:
+                logging.info('Training...(kernel='+kernel+',c='+str(c)+',gamma='+str(gamma)+',degree='+str(degree)+')')
+                # 训练
+                time0 = time.time()
+                clf = SVC(kernel=kernel, C=c, gamma=gamma, degree=degree)
+                clf.fit(train_features, train_labels)
+                time_train = time.time() - time0
+                # 预测
+                time0 = time.time()
+                test_predict = clf.predict(test_features)
+                time_predict = time.time() - time0
+                # 计算结果
+                accuracy = accuracy_score(test_labels, test_predict)
+                precision = precision_score(test_labels, test_predict)
+                recall = recall_score(test_labels, test_predict)
+                f1 = f1_score(test_labels, test_predict)
+                # 记录结果
+                result_info.append([kernel, c, gamma, degree, time_train, time_predict, accuracy, precision, recall, f1])
+                # # 保存结果
+                result = pd.DataFrame(data=test_predict, columns=['Predict'])
+                result_filename = 'result_' + kernel + '_' + str(c) + '_' + str(gamma) + '_' + str(degree)
+                result.to_csv(path_or_buf=os.path.join(dir_result, result_filename), index=False)
+    result_info_df = pd.DataFrame(data=result_info, columns=column)
+    result_info_df.to_csv(path_or_buf=path_log, index=False)
+
+    # 加载模型
+    # clf = joblib.load('train/20210820011346/model.pickle')
+
+    # # 保存模型
+    # joblib.dump(clf, dir_log + '/model.pickle')

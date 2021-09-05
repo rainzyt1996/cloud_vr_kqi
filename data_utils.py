@@ -104,7 +104,7 @@ class DataUtils:
                         pcap_index_arr[j][nRead] = 1
                         pcap_index_arr[j][nIndex] = i
                         dj = 0
-                        while dj < 20:
+                        while dj < 20 and j + dj < len_pcap_index:
                             dj += 1
                             if pcap_index_arr[j+dj][nRead] == 0 and (ap_index_arr[i][0:4] == pcap_index_arr[j+dj][0:4]):
                                 obj_curr[16] += pcap_index_arr[j+dj][5]
