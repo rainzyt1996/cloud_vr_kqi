@@ -135,26 +135,21 @@ class DataUtils:
         :param to_csv_on: 是否输出csv文件
         :return: 整体路由器时间戳数据
         """
+        logging.info('Data merging...')
         if len(filepath_list) != 3:
             logging.error('Wrong number(%d) of lists. The number of target lists is 3.', len(filepath_list))
             return
         log0 = self.import_router_timestamp(filepath=filepath_list[0])
-        logging.info('Data merge ... (1/3)')
         log1 = self.import_router_timestamp(filepath=filepath_list[1])
         log2 = pd.concat(objs=[log0, log1])
-        logging.info('Data merge ... (2/3)')
         log1 = self.import_router_timestamp(filepath=filepath_list[2])
         log0 = pd.concat(objs=[log2, log1])
-        logging.info('Data merge ... (3/3)')
         log0.sort_values(by=['Time_Sync', 'Time_Local'], inplace=True)
-        logging.info('Data sort ...')
         if print_on:
             print(log0)
         if to_csv_on:
             output_path = os.path.join(os.path.dirname(filepath_list[0]), 'log_tall')
             log0.to_csv(path_or_buf=output_path, index=False)
-            logging.info('Data output ...')
-        logging.info('Data merge complete.')
         return log0
 
     def delete_null_data(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
@@ -166,7 +161,6 @@ class DataUtils:
         :param to_csv_on: 是否输出csv文件
         :return: 处理后数据
         """
-        logging.info('Null data delete start.')
         # data = pd.read_csv(filepath_or_buffer=filepath)
         null_list = data[data.isna().T.any()].index.tolist()
         data = data.drop(null_list)
@@ -175,7 +169,6 @@ class DataUtils:
         if to_csv_on:
             # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_nonnull')
             data.to_csv(path_or_buf=output_path, index=False)
-        logging.info('Null data delete complete.')
         return data
 
     def extract_ap_index(self, dir_ap_log: str, print_on=False, to_csv_on=True):
@@ -187,6 +180,7 @@ class DataUtils:
         :param to_csv_on:
         :return:
         """
+        logging.info('Index extracting...')
         path_ap_log = os.path.join(dir_ap_log, 'log_tall')
 
         rt_tsp = pd.read_csv(filepath_or_buffer=path_ap_log)
@@ -198,8 +192,15 @@ class DataUtils:
         result = self.delete_null_data(data=result)
         # 筛选TCP数据
         result = self.filter(filepath_or_dataframe=result, key='Protocol', value=6)
-        # 提取指标T0_100
-        result = self.extract_t0_100(data=result)
+        # 提取指标T2_T0_Sync
+        logging.info('Extract index: T2-T0')
+        result.insert(14, 'T2_T0_Sync', result['T1_T0_Sync'] + result['T2_T1_Sync'])
+        # 提取指标T0_100, T0_200, T0_500, T0_1000, T0_2000
+        result = self.extract_tx_n(data=result, insert_i=15, column_name='T0_100', index_name='T0_Sync', index_i=4, numstep=100, delete_on=False)
+        result = self.extract_tx_n(data=result, insert_i=16, column_name='T0_200', index_name='T0_Sync', index_i=4, numstep=200, delete_on=False)
+        result = self.extract_tx_n(data=result, insert_i=17, column_name='T0_500', index_name='T0_Sync', index_i=4, numstep=500, delete_on=False)
+        result = self.extract_tx_n(data=result, insert_i=18, column_name='T0_1000', index_name='T0_Sync', index_i=4, numstep=1000, delete_on=False)
+        result = self.extract_tx_n(data=result, insert_i=19, column_name='T0_2000', index_name='T0_Sync', index_i=4, numstep=2000)
 
         if print_on:
             print(result)
@@ -270,7 +271,7 @@ class DataUtils:
         :param to_csv_on: 是否输出csv文件
         :return: 指标列表
         """
-        logging.info('Index extract start.')
+        logging.info('Extract index: T1-T0, T2-T1')
         column = self.columnIndex[0:14]
         obj_curr = [None] * len(column)
         index_res = [obj_curr]
@@ -379,7 +380,6 @@ class DataUtils:
                 logging.error('Invalid parameter: extract_delta_t->output_filepath=None')
             else:
                 index_df.to_csv(path_or_buf=output_path, index=False)
-        logging.info('Index extract complete.')
         return index_df
 
     def extract_t0_100(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
@@ -409,6 +409,50 @@ class DataUtils:
             data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return data
 
+    def extract_tx_n(self,
+                     data: pd.DataFrame,
+                     insert_i: int,
+                     column_name: str,
+                     index_name: str,
+                     index_i: int,
+                     numstep: int,
+                     output_path=None,
+                     delete_on=True,
+                     print_on=False,
+                     to_csv_on=False):
+        """
+        提取指标Tx_n
+
+        :param data: 数据
+        :param insert_i: 提取特征的插入位置
+        :param column_name: 提取特征的名称
+        :param index_name: 提取特征的源特征Tx名称
+        :param index_i: 提取特征的源特征位置
+        :param numstep: 步进值n
+        :param output_path: 结果保存路径
+        :param delete_on: 是否删除前n项
+        :param print_on: 是否在控制台打印
+        :param to_csv_on: 是否输出为csv
+        :return:
+        """
+        logging.info('Extract index: ' + column_name)
+        data.insert(insert_i, column_name, '')
+        column = list(data)
+        len_data = len(data)
+        data_arr = data.values
+
+        for i in range(numstep, len_data):
+            data_arr[i, insert_i] = data_arr[i, index_i] - data_arr[i - numstep, index_i]
+        if delete_on:
+            data_arr = np.delete(arr=data_arr, obj=np.s_[0:numstep], axis=0)
+        data = pd.DataFrame(data=data_arr, columns=column)
+
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
     def fill_null_index(self, index_df: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
         空值填充处理
@@ -419,13 +463,12 @@ class DataUtils:
         :param to_csv_on: 是否输出csv文件
         :return: 处理后数据
         """
-        logging.info('Index null fill start.')
         column = self.columnIndex[0:14]
         # index_df = pd.read_csv(filepath_or_buffer=filepath)
         len_index = len(index_df)
         index_arr = index_df.values
         # 处理T0空值
-        for i in bar.progressbar(range(0, len_index)):
+        for i in range(0, len_index):
             if pd.isna(index_arr[i, 4]):
                 n = 0
                 for j in range(i, len_index):
@@ -446,7 +489,6 @@ class DataUtils:
         if to_csv_on:
             # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_fill')
             index_fill_df.to_csv(path_or_buf=output_path, index=False)
-        logging.info('Index null fill complete.')
         return index_fill_df
 
     def filter(self, filepath_or_dataframe, key: str, value, output_path=None, print_on=False, to_csv_on=False):

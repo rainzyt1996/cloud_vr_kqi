@@ -9,17 +9,19 @@
 # import data_combine as dc
 # import data_analysis as da
 # import data_preprocess as dp
-# from data_utils import DataUtils
+import logging
+
+from data_utils import DataUtils
 # import index_extract as ie
 # import logging
 # import model
-# import numpy as np
-# import os
+import numpy as np
+import os
 # import pandas as pd
 # import program_logging
 # import progressbar as bar
-import svm
-# import test
+# import svm
+import test
 # import test_bilstm_crf as tbc
 # import test_model as tm
 # import torch
@@ -34,60 +36,77 @@ import svm
 #     logging.info('Bug time unit change complete.')
 #
 #
-# def get_path():
-#     """
-#     获取路径
-#
-#     :return:
-#     """
-#     ap_log_dir_list = []
-#     bug_time_dir_list = []
-#     pcap_path_list = []
-#     type = 'video'
-#     num = 1
-#     root = 'D:/Project/PyCharm/huawei_kqi/data/data_20210723'
-#     for idx in range(1, 6):
-#         type_idx = type + '_' + str(idx)
-#         type_idx_num = type_idx + '_' + str(num)
-#         ap_log_dir = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/ap_log_' + type_idx_num
-#         ap_log_dir_list.append(ap_log_dir)
-#         bug_time_dir = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/screenrecord_' + type_idx_num
-#         bug_time_dir_list.append(bug_time_dir)
-#         pcap_path = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/pcap_wifi_' + type_idx_num + '.pcap'
-#         pcap_path_list.append(pcap_path)
-#     return ap_log_dir_list, bug_time_dir_list, pcap_path_list
+def get_path():
+    """
+    获取路径
+
+    :return:
+    """
+    ap_log_dir_list = []
+    bug_time_dir_list = []
+    pcap_path_list = []
+    type = 'video'
+    num = 2
+    root = 'data/data_20210831'
+    i_list = [1, 2, 3, 5, 6]
+    for idx in i_list:
+        type_idx = type + '_' + str(idx)
+        type_idx_num = type_idx + '_' + str(num)
+        ap_log_dir = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/ap_log_' + type_idx_num
+        ap_log_dir_list.append(ap_log_dir)
+        bug_time_dir = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/ScreenRecord_' + type_idx_num
+        bug_time_dir_list.append(bug_time_dir)
+        pcap_path = root + '/data_' + type + '/data_' + type_idx + '/data_' + type_idx_num + '/pcap_wifi_' + type_idx_num + '.pcap'
+        pcap_path_list.append(pcap_path)
+    return ap_log_dir_list, bug_time_dir_list, pcap_path_list
 
 
-if __name__ == '__main__':
-    # data_utils = DataUtils()
+def data_processing():
+    """
 
-    # # 获取路径
-    # ap_log_dir_list, bug_time_dir_list, pcap_path_list = get_path()
-    # i = 1
+    :return:
+    """
+    data_utils = DataUtils()
 
-    # # 合并AP端log  -->  log_tall
-    # combine_router_timestamp(ap_log_dir_list)
+    # 获取路径
+    ap_log_dir_list, bug_time_dir_list, pcap_path_list = get_path()
 
-    # # 提取AP特征信息  -->  index_tall
-    # data_utils.extract_ap_index(dir_ap_log=ap_log_dir_list[i])
+    for i in range(0, len(ap_log_dir_list)):
+        logging.info('Data processing...(%d/%d)', i, len(ap_log_dir_list))
+        ap_log_dir = ap_log_dir_list[i]
+        bug_time_dir = bug_time_dir_list[i]
+        pcap_path = pcap_path_list[i]
 
-    # # 提取抓包特征信息  -->  capture_info
-    # data_utils.extract_capture_info(filepath=pcap_path_list[i])
+        # 合并AP端log  -->  log_tall
+        ap_path_list = [ap_log_dir + '/log_t0',
+                        ap_log_dir + '/log_t1',
+                        ap_log_dir + '/log_t2']
+        data_utils.combine_router_timestamp(filepath_list=ap_path_list)
 
-    # # 合并特征信息  -->  index, capture_info_read
-    # data_utils.combine_index(dir_ap_log=ap_log_dir_list[i],
-    #                          dir_pcap=os.path.dirname(pcap_path_list[i]))
+        # 提取AP特征信息  -->  index_tall
+        data_utils.extract_ap_index(dir_ap_log=ap_log_dir)
 
-    # # 异常数据标注  -->  index_label
-    # data_utils.set_label(index_filepath=os.path.join(ap_log_dir_list[i], 'index'),
-    #                      bug_filepath=os.path.join(bug_time_dir_list[i], 'log_bug_timestamp'))
+        # # 提取抓包特征信息  -->  capture_info
+        # data_utils.extract_capture_info(filepath=pcap_path)
+
+        # # 合并特征信息  -->  index, capture_info_read
+        # data_utils.combine_index(dir_ap_log=ap_log_dir,
+        #                          dir_pcap=os.path.dirname(pcap_path)
+
+        # # 异常数据标注  -->  index_label
+        # data_utils.set_label(index_filepath=os.path.join(ap_log_dir, 'index'),
+        #                      bug_filepath=os.path.join(bug_time_dir, 'log_bug_timestamp'))
 
     # # 异常时间标注单位换算  -->  log_bug_timestamp
     # change_bug_time_unit(bug_time_dir_list)
 
-    # 训练
-    svm.test_svm()
+
+if __name__ == '__main__':
+    # 数据处理
+    data_processing()
+
+    # # 训练
+    # svm.test_svm()
 
     # # 测试
-    # test.test_capture_info_read()
-
+    # test.test_time_label()
