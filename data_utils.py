@@ -17,118 +17,60 @@ from pyshark import FileCapture
 
 class DataUtils:
 
+    columnApTimestamp = ['Tn', 'Source', 'Destination', 'ID&Fragment', 'Protocol', 'Time_Sync', 'Time_Local']
+    columnPacketID = ['Source', 'Destination', 'ID&Fragment', 'Protocol']
+    columnApIndexList = ['T0_Sync', 'T0_Local', 'T1_Sync', 'T1_Local', 'T2_Sync', 'T2_Local',
+                         'T1_T0_Sync', 'T1_T0_Local', 'T2_T1_Sync', 'T2_T1_Local', 'T2_T0_Sync',
+                         'T0_100', 'T0_200', 'T0_500', 'T0_1000', 'T0_2000',
+                         'Retry_ID']
+    columnApIndex = columnPacketID + columnApIndexList
+    columnPcapIndexList = ['Length', 'Retry']
+    columnPcapIndex = columnPacketID + columnPcapIndexList
+    columnPcapInfo = columnPcapIndex + ['Sniff_Timestamp']
+    columnIndex = columnPacketID + columnApIndexList + columnPcapIndexList
+    captureFilter = 'ip.dst == 192.168.137.160 && tcp'
+    nPacketID = len(columnPacketID)     # 4
+    nApIndex = len(columnApIndex)       # 21
+    nPcapIndex = len(columnPcapIndex)   # 6
+    nIndex = len(columnIndex)           # 23
+
     def __init__(self):
-        self.columnTimestamp = ['Tn', 'Source', 'Destination', 'ID&Fragment', 'Protocol', 'Time_Sync', 'Time_Local']
-        self.columnInfo = ['Source', 'Destination', 'ID&Fragment', 'Protocol', 'Length', 'Retry', 'Sniff_Timestamp']
-        self.columnIndex = ['Source', 'Destination', 'ID&Fragment', 'Protocol',
-                            'T0_Sync', 'T0_Local', 'T1_Sync', 'T1_Local', 'T2_Sync', 'T2_Local',
-                            'T1_T0_Sync', 'T1_T0_Local', 'T2_T1_Sync', 'T2_T1_Local', 'T0_100', 'Length', 'Retry']
-        self.captureFilter = 'ip.dst == 192.168.137.160 && tcp'
-
-    def change_unit(self, filepath: str, column: list, coefficient: float):
-        data = pd.read_csv(filepath_or_buffer=filepath)
-        data[column] = data[column] * coefficient
-        output_path, ext = os.path.splitext(filepath)
-        data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
-        return data
-
-    def combine_bug_timestamp(self, path_vtsp: str, path_bm: str, print_on=False, to_csv_on=True):
         """
-        合并 视频时间戳&异常标注
-
-        :param path_vtsp: 视频时间戳文件路径
-        :param path_bm: 异常标注文件路径
-        :param print_on: 是否打印
-        :param to_csv_on: 是否输出csv文件
-        :return:
+        初始化
         """
-        vtsp = pd.read_csv(filepath_or_buffer=path_vtsp,
-                           header=None,
-                           names=['Filepath', 'Start_Timestamp', 'End_Timestamp'])
-        btsp = pd.read_csv(filepath_or_buffer=path_bm)
-        btsp['Start_Timestamp'] = btsp['Start_Time'] + btsp['Start_Frame'] / 30 + vtsp.iloc[0, 1] / 1000
-        btsp['End_Timestamp'] = btsp['End_Time'] + btsp['End_Frame'] / 30 + vtsp.iloc[0, 1] / 1000
-        if print_on:
-            print(btsp)
-        if to_csv_on:
-            output_path = os.path.join(os.path.dirname(path_bm), 'log_bug_timestamp')
-            btsp.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
-        return btsp
+        # 数据项
+        self.cPktId = ['Source', 'Destination', 'ID&Fragment', 'Protocol']    # 包标识
+        self.cApTimestamp = ['T0', 'T1', 'T2']    # AP端时间戳
+        # 特征项
+        self.cApPktIndex = ['T1_T0', 'T2_T1', 'T2_T0']  # AP端单包特征
+        self.cCapPktIndex = ['Length', 'Retry']     # 抓包端单包特征
+        self.cPktIndex = self.cApPktIndex + self.cCapPktIndex    # 单包特征
+        self.region = [100, 200, 500, 1000, 2000]  # 区间值
+        self.cRgnSpnIndex = []  # 区间跨度特征
+        self.cRgnSttIndex = []  # 区间统计特征
+        for rgn in self.region:
+            for item in self.cApTimestamp:
+                self.cRgnSpnIndex.append(item + '_' + str(rgn))
+            for item in self.cPktIndex:
+                self.cRgnSttIndex.append(item + '_Avg_' + str(rgn))
+                self.cRgnSttIndex.append(item + '_Std_' + str(rgn))
+        self.cRgnIndex = self.cRgnSpnIndex + self.cRgnSttIndex  # 区间特征
+        self.cIndex = self.cPktIndex + self.cRgnIndex   # 特征
+        # 文件信息项
+        self.cFileApLog = ['Tn'] + self.cPktId + ['Time_Sync', 'Time_Local']   # AP端时间戳Log
+        self.cFileCapInfo = self.cPktId + self.cCapPktIndex + ['Sniff_Timestamp']    # 抓包端信息
+        self.cFileApPktData = self.cPktId + self.cApTimestamp    # AP端合并时间戳Log
+        self.cFilePktData = self.cFileApPktData + self.cCapPktIndex  # 单包数据
+        self.cFilePktIndex = self.cFilePktData + self.cApPktIndex     # 单包特征
+        self.cFileIndex = self.cFilePktIndex + self.cRgnIndex   # 特征
+        self.cFileIdxLabel = self.cFileIndex + ['Label']    # 带标签的特征
+        # 常量
 
-    def combine_index(self, dir_ap_log: str, dir_pcap: str, print_on=False, to_csv_on=True):
+    ################################################################################################################
+    # 数据整合
+    def combine_ap_timestamp(self, filepath_list: list, print_on=False, to_csv_on=True):
         """
-        合并ap端log提取指标和空口数据提取指标
-
-        :param dir_ap_log:
-        :param dir_pcap:
-        :param print_on:
-        :param to_csv_on:
-        :return:
-        """
-        logging.info('Index combine start.')
-        path_ap_index = os.path.join(dir_ap_log, 'index_tall')
-        path_pcap_index = os.path.join(dir_pcap, 'capture_info')
-        ap_index_arr = pd.read_csv(filepath_or_buffer=path_ap_index).values.tolist()
-        pcap_index_df = pd.read_csv(filepath_or_buffer=path_pcap_index)
-        pcap_index_df['Read'] = pcap_index_df['Retry'] * 0
-        pcap_index_df['Index'] = pcap_index_df['Retry'] * 0
-        pcap_index_arr = pcap_index_df.values.tolist()
-
-        nSniffTimestamp = 6
-        nRead = 7
-        nIndex = 8
-        len_ap_index = len(ap_index_arr)
-        len_pcap_index = len(pcap_index_arr)
-
-        column = self.columnIndex
-        obj_curr = [None] * len(column)
-        index_res = [obj_curr]
-
-        start = 0
-        while not (ap_index_arr[0][0:4] == pcap_index_arr[start][0:4]):
-            start += 1
-
-        for i in bar.progressbar(range(0, len_ap_index)):
-            obj_curr[0:15] = ap_index_arr[i][0:15]
-            flag = True
-            for j in range(start, len_pcap_index):
-                if pcap_index_arr[j][nRead] == 0:
-                    if flag:
-                        start = j
-                        flag = False
-                    if ap_index_arr[i][0:4] == pcap_index_arr[j][0:4]:
-                        if not -15 < pcap_index_arr[j][nSniffTimestamp] - ap_index_arr[i][4] < 15:
-                            obj_curr = [None] * len(column)
-                            break
-                        obj_curr[15:17] = pcap_index_arr[j][4:6]
-                        pcap_index_arr[j][nRead] = 1
-                        pcap_index_arr[j][nIndex] = i
-                        dj = 0
-                        while dj < 20 and j + dj < len_pcap_index:
-                            dj += 1
-                            if pcap_index_arr[j+dj][nRead] == 0 and (ap_index_arr[i][0:4] == pcap_index_arr[j+dj][0:4]):
-                                obj_curr[16] += pcap_index_arr[j+dj][5]
-                                pcap_index_arr[j+dj][nRead] = 1
-                                pcap_index_arr[j+dj][nIndex] = i
-                                j = j + dj
-                                dj = 0
-                        index_res.append(obj_curr)
-                        obj_curr = [None] * len(column)
-                        break
-        index_df = pd.DataFrame(data=index_res, columns=column)
-        pcap_index_df = pd.DataFrame(data=pcap_index_arr)
-
-        if print_on:
-            print(index_df)
-        if to_csv_on:
-            index_df.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index'), index=False, float_format="%.6f")
-            pcap_index_df.to_csv(path_or_buf=os.path.join(dir_pcap, 'capture_info_read'), index=False)
-        logging.info('Index combine complete.')
-        return index_df
-
-    def combine_router_timestamp(self, filepath_list: list, print_on=False, to_csv_on=True):
-        """
-        合并 路由器时间戳数据T0&T1&T2
+        合并路由器时间戳数据T0&T1&T2
 
         :param filepath_list: T0,T1,T2文件路径列表
         :param print_on: 是否打印结果
@@ -152,30 +94,623 @@ class DataUtils:
             log0.to_csv(path_or_buf=output_path, index=False)
         return log0
 
-    def delete_null_data(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
+    def extract_ap_pkt_data(self, path_ap_log_all: str, print_on=False, to_csv_on=True):
+        """
+        提取AP端单包数据
+
+        :param path_ap_log_all: AP端时间戳Log文件路径
+        :param print_on: 打印与否
+        :param to_csv_on: 输出文件与否
+        :return: AP端单包数据
+        """
+        logging.info('AP packet data extracting ...')
+
+        # 变量定义 #######################################################
+        column = self.cFileApPktData
+        obj_curr = [None] * len(column)
+        data_res = [obj_curr]
+        data_log_df = pd.read_csv(filepath_or_buffer=path_ap_log_all)
+        len_log = len(data_log_df)
+        data_log_df['Flag_Read'] = data_log_df['Tn'] * 0
+        data_log = data_log_df.values
+        iTn = data_log_df.columns.tolist().index('Tn')              # 0
+        iSrc = data_log_df.columns.tolist().index('Source')         # 1
+        iDst = data_log_df.columns.tolist().index('Destination')    # 2
+        iIdf = data_log_df.columns.tolist().index('ID&Fragment')    # 3
+        iPrt = data_log_df.columns.tolist().index('Protocol')       # 4
+        iTsy = data_log_df.columns.tolist().index('Time_Sync')      # 5
+        iTlc = data_log_df.columns.tolist().index('Time_Local')     # 6
+        iFlg = data_log_df.columns.tolist().index('Flag_Read')      # 7
+        iEnd = iFlg + 1
+        oSrc = column.index('Source')       # 0
+        oDst = column.index('Destination')  # 1
+        oIdf = column.index('ID&Fragment')  # 2
+        oPrt = column.index('Protocol')     # 3
+        oT0 = column.index('T0')            # 4
+        oT1 = column.index('T1')            # 5
+        oT2 = column.index('T2')            # 6
+        oEnd = oT2 + 1
+
+        # 函数定义 ########################################################
+        def get_ap_pkt_data(idx_start: int):
+            """
+            包标识匹配，获取单包数据
+
+            :param idx_start: 开始索引
+            :return:
+            """
+            # 判断索引是否越界
+            if idx_start < len_log:
+                # 开始遍历匹配
+                for idx_cal in range(idx_start, len_log):
+                    # 判断包标识项是否匹配
+                    if obj_curr[oSrc] == data_log[idx_cal, iSrc] and obj_curr[oDst] == data_log[idx_cal, iDst] and \
+                            obj_curr[oIdf] == data_log[idx_cal, iIdf] and obj_curr[oPrt] == data_log[idx_cal, iPrt]:
+                        # 判断当前log行Tn项的值
+                        tn = data_log[idx_cal, iTn]
+                        if tn == 0:
+                            # 判断缓存变量中的T0, T1, T2
+                            if obj_curr[oT0:oEnd] == [None] * (oEnd - oT0):
+                                obj_curr[oT0] = data_log[idx_cal, iTsy]
+                                data_log[idx_cal, iFlg] = 1
+                            else:
+                                break
+                        elif tn == 1:
+                            # 判断缓存变量中的T1, T2
+                            if obj_curr[oT1:oEnd] == [None] * (oEnd - oT1):
+                                obj_curr[oT1] = data_log[idx_cal, iTsy]
+                                data_log[idx_cal, iFlg] = 1
+                            elif obj_curr[oT1] is not None and obj_curr[oT2] is None:
+                                data_log[idx_cal, iFlg] = 1
+                            else:
+                                break
+                        elif tn == 2:
+                            # 判断缓存变量中的T2
+                            if obj_curr[oT2] is None:
+                                obj_curr[oT2] = data_log[idx_cal, iTsy]
+                                data_log[idx_cal, iFlg] = 1
+                            break
+                        else:
+                            logging.error('Invalid data: [%d]Tn=%d', idx_cal, tn)
+                            break
+
+        # 功能实现 ########################################################
+        for idx_ex in bar.progressbar(range(0, len_log)):
+            # 判断当前log行是否已读取
+            if data_log[idx_ex, iFlg] == 0:
+                # 将当前包标识项写入缓存变量
+                obj_curr[oSrc] = data_log[idx_ex, iSrc]
+                obj_curr[oDst] = data_log[idx_ex, iDst]
+                obj_curr[oIdf] = data_log[idx_ex, iIdf]
+                obj_curr[oPrt] = data_log[idx_ex, iPrt]
+                # 获取当前包数据
+                get_ap_pkt_data(idx_start=idx_ex)
+                # 将缓存变量写入结果，清空缓存变量
+                data_res.append(obj_curr)
+                obj_curr = [None] * len(column)
+        data_res_df = pd.DataFrame(data=data_res, columns=column)
+
+        # 结果处理 ########################################################
+        if print_on:
+            print(data_res_df)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_ap_log_all), 'rawdata_ap')
+            data_res_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data_res_df
+
+    def combine_pkt_data(self, path_ap_pkt_data: str, path_cap_info: str, print_on=False, to_csv_on=True):
+        """
+        合并单包数据
+
+        :param path_ap_pkt_data: AP端时间戳数据文件路径
+        :param path_cap_info: 抓包端数据文件路径
+        :param print_on: 打印与否
+        :param to_csv_on: 输出文件与否
+        :return: 单包数据
+        """
+        logging.info('Packet data combining ...')
+
+        # 变量定义 ################################################
+        column = self.cFilePktData
+        obj_curr = [None] * len(column)
+        data_res = [obj_curr]
+        data_ap_df = pd.read_csv(filepath_or_buffer=path_ap_pkt_data)
+        data_ap = data_ap_df.values.tolist()
+        data_cap_df = pd.read_csv(filepath_or_buffer=path_cap_info)
+        data_cap_df['Read'] = data_cap_df['Retry'] * 0
+        data_cap_df['Index'] = data_cap_df['Retry'] * 0
+        data_cap = data_cap_df.values.tolist()
+        len_data_ap = len(data_ap)
+        len_data_cap = len(data_cap)
+        iApSrc = data_ap_df.columns.tolist().index('Source')        # 0
+        iApDst = data_ap_df.columns.tolist().index('Destination')   # 1
+        iApIdf = data_ap_df.columns.tolist().index('ID&Fragment')   # 2
+        iApPrt = data_ap_df.columns.tolist().index('Protocol')      # 3
+        iApT0 = data_ap_df.columns.tolist().index('T0')             # 4
+        iApT1 = data_ap_df.columns.tolist().index('T1')             # 5
+        iApT2 = data_ap_df.columns.tolist().index('T2')             # 6
+        iApPkgIdEnd = iApPrt + 1
+        iApEnd = iApT2 + 1
+        iCapSrc = data_cap_df.columns.tolist().index('Source')              # 0
+        iCapDst = data_cap_df.columns.tolist().index('Destination')         # 1
+        iCapIdf = data_cap_df.columns.tolist().index('ID&Fragment')         # 2
+        iCapPrt = data_cap_df.columns.tolist().index('Protocol')            # 3
+        iCapLen = data_cap_df.columns.tolist().index('Length')              # 4
+        iCapRty = data_cap_df.columns.tolist().index('Retry')               # 5
+        iCapSts = data_cap_df.columns.tolist().index('Sniff_Timestamp')     # 6
+        iCapRd = data_cap_df.columns.tolist().index('Read')                 # 7
+        iCapIdx = data_cap_df.columns.tolist().index('Index')               # 8
+        iCapPkgIdEnd = iCapPrt + 1
+        iCapPkgDataEnd = iCapRty + 1
+        iCapEnd = iCapIdx + 1
+        oSrc = column.index('Source')       # 0
+        oDst = column.index('Destination')  # 1
+        oIdf = column.index('ID&Fragment')  # 2
+        oPrt = column.index('Protocol')     # 3
+        oT0 = column.index('T0')            # 4
+        oT1 = column.index('T1')            # 5
+        oT2 = column.index('T2')            # 6
+        oLen = column.index('Length')       # 7
+        oRty = column.index('Retry')        # 8
+        oPkgIdEnd = oPrt + 1
+        oApPkgDataEnd = oT2 + 1
+        oEnd = oRty + 1
+        idxCapBgn = 0   # 抓包端搜索起始索引
+
+        # 功能实现 ################################################
+        while not (data_ap[0][iApSrc:iApPkgIdEnd] == data_cap[idxCapBgn][iCapSrc:iCapPkgIdEnd]):
+            idxCapBgn += 1
+        for i in bar.progressbar(range(len_data_ap)):
+            obj_curr[oSrc:oApPkgDataEnd] = data_ap[i][iApSrc:iApEnd]
+            flag = True
+            for j in range(idxCapBgn, len_data_cap):
+                if data_cap[j][iCapRd] == 0:
+                    if flag:
+                        idxCapBgn = j
+                        flag = False
+                    if data_ap[i][iApSrc:iApPkgIdEnd] == data_cap[j][iCapSrc:iCapPkgIdEnd]:
+                        if not -15 < data_cap[j][iCapSts] - data_ap[i][iApT0] < 15:
+                            obj_curr = [None] * len(column)
+                            break
+                        obj_curr[oLen:oEnd] = data_cap[j][iCapLen:iCapPkgDataEnd]
+                        data_cap[j][iCapRd] = 1
+                        data_cap[j][iCapIdx] = i
+                        dj = 0
+                        while dj < 20 and j + dj + 1 < len_data_cap:
+                            dj += 1
+                            if data_cap[j+dj][iCapRd] == 0 and (data_ap[i][iApSrc:iApPkgIdEnd] == data_cap[j+dj][iCapSrc:iCapPkgIdEnd]):
+                                obj_curr[oRty] += data_cap[j+dj][iCapRty]
+                                data_cap[j+dj][iCapRd] = 1
+                                data_cap[j+dj][iCapIdx] = i
+                                j = j + dj
+                                dj = 0
+                        data_res.append(obj_curr)
+                        obj_curr = [None] * len(column)
+                        break
+        index_df = pd.DataFrame(data=data_res, columns=column)
+        data_cap_df = pd.DataFrame(data=data_cap)
+
+        # 结果处理 ################################################
+        if print_on:
+            print(index_df)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_ap_pkt_data), 'rawdata')
+            index_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+            output_path = os.path.join(os.path.dirname(path_cap_info), 'capture_info_read')
+            data_cap_df.to_csv(path_or_buf=output_path, index=False)
+        return index_df
+
+    ################################################################################################################
+    # 数据预处理
+    def preprocessing(self, path_data: str, print_on=False, to_csv_on=True):
+        """
+        数据预处理
+
+        :param path_data:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Preprocessing ...')
+
+        # 变量定义 ########################################################
+        data = pd.read_csv(filepath_or_buffer=path_data)
+        columns_del = ['T1', 'T2', 'Length', 'Retry']
+        src_flt = data['Source'].value_counts().idxmax()
+        prt_flt = 6
+
+        # 功能实现 ########################################################
+        # 空值舍弃
+        data = self.delete_null_data(data=data, columns=columns_del)
+        # 空值填充
+        data = self.fill_null_timestamp(data=data)
+        # 业务流筛选
+        data = self.filter(filepath_or_dataframe=data, key='Protocol', value=prt_flt)     # 筛选TCP协议
+        data = self.filter(filepath_or_dataframe=data, key='Source', value=src_flt)     # 筛选源地址
+
+        # 结果处理 ########################################################
+        if print_on:
+            print(data)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_data), 'data_pkt')
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    def delete_null_data(self, data: pd.DataFrame, columns: list, output_path=None, print_on=False, to_csv_on=False):
         """
         删除空数据所在行
 
         :param data: 数据
+        :param columns: 待处理的列索引
+        :param output_path: 保存路径
         :param print_on: 是否打印结果
         :param to_csv_on: 是否输出csv文件
         :return: 处理后数据
         """
-        # data = pd.read_csv(filepath_or_buffer=filepath)
-        null_list = data[data.isna().T.any()].index.tolist()
-        data = data.drop(null_list)
+        # 功能实现 ##############################################################
+        index_null = data[data[columns].isna().T.any()].index.tolist()
+        data = data.drop(index_null)
+
+        # 结果处理 ##############################################################
         if print_on:
             print(data)
         if to_csv_on:
-            # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_nonnull')
-            data.to_csv(path_or_buf=output_path, index=False)
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return data
+
+    def fill_null_timestamp(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
+        """
+        空值填充处理（T0）
+
+        :param data: 数据
+        :param output_path: 保存路径
+        :param print_on: 是否打印结果
+        :param to_csv_on: 是否输出csv文件
+        :return: 处理后数据
+        """
+        # 变量定义 #########################################################
+        len_data = len(data)
+        data_arr = data.values
+        iT0 = data.columns.tolist().index('T0')
+        iT1 = data.columns.tolist().index('T1')
+
+        # 功能实现 #########################################################
+        for i in range(0, len_data):
+            if pd.isna(data_arr[i, iT0]):
+                n = 0
+                for j in range(i, len_data):
+                    if pd.isna(data_arr[j, iT0]):
+                        n = n + 1
+                    else:
+                        break
+                for k in range(1, n + 1):
+                    data_arr[i - 1 + k, iT0] = np.around((data_arr[i - 2 + k, iT0] + data_arr[i - 1 + k, iT1]) / 2, 6)
+        data = pd.DataFrame(data=data_arr, columns=data.columns)
+
+        # 结果处理 #########################################################
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    def filter(self, filepath_or_dataframe, key: str, value, output_path=None, print_on=False, to_csv_on=False):
+        """
+        筛选某一属性为特定值的数据
+
+        :param filepath_or_dataframe: 文件路径或数据
+        :param key: 属性名称
+        :param value: 属性值
+        :param print_on: 是否打印
+        :param to_csv_on: 是否输出为csv文件
+        :param savepath: 保存路径
+        :return: 筛选后的数据表
+        """
+        if type(filepath_or_dataframe) is str:
+            data = pd.read_csv(filepath_or_buffer=filepath_or_dataframe)
+        elif type(filepath_or_dataframe) is pd.DataFrame:
+            data = filepath_or_dataframe
+        else:
+            logging.error('Parameter(filepath_or_dataframe) is error!')
+            return None
+        if key in data.columns:
+            data = data[data[key] == value]
+        else:
+            logging.error('The key is not in data!')
+            return None
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    ################################################################################################################
+    # 特征提取
+    def extract_index(self, path_data: str, print_on=False, to_csv_on=True):
+        """
+        特征提取
+
+        :param path_data: 数据路径
+        :param print_on: 是否打印
+        :param to_csv_on: 是否输出csv文件
+        :return:
+        """
+        logging.info('Index extracting ...')
+
+        # 变量定义 ################################################################
+        data = pd.read_csv(filepath_or_buffer=path_data)
+
+        # 功能实现 ################################################################
+        # 提取单包特征
+        output_path = os.path.join(os.path.dirname(path_data), 'index_pkt')
+        data = self.extract_pkt_index(data=data, output_path=output_path, to_csv_on=to_csv_on)
+        # 提取区间特征
+        output_path = os.path.join(os.path.dirname(path_data), 'index')
+        data = self.extract_region_index(data=data, del_on=True, output_path=output_path, to_csv_on=to_csv_on)
+
+        # 结果处理 ################################################################
+        if print_on:
+            print(data)
+        return data
+
+    def extract_pkt_index(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
+        """
+        提取单包特征：T1-T0, T2-T1, T2-T0
+
+        :param data: 数据
+        :param output_path: 输出路径
+        :param print_on: 是否打印
+        :param to_csv_on: 是否输出csv文件
+        :return:
+        """
+        logging.info('Packet index extracting ...')
+
+        # 变量定义 ##############################################################
+
+        # 功能实现 ##############################################################
+        data['T1_T0'] = np.around(data['T1'] - data['T0'], 6)
+        data['T2_T1'] = np.around(data['T2'] - data['T1'], 6)
+        data['T2_T0'] = np.around(data['T2'] - data['T0'], 6)
+
+        # 结果处理 ##############################################################
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    def extract_region_index(self, data: pd.DataFrame, output_path=None, del_on=False, print_on=False, to_csv_on=False):
+        """
+        提取区间特征
+
+        :param data: 数据
+        :param output_path: 输出路径
+        :param del_on: 是否删除首区间
+        :param print_on: 是否打印
+        :param to_csv_on: 是否输出csv文件
+        :return:
+        """
+        logging.info('Region index extracting ...')
+
+        # 变量定义 ###################################################
+        region = self.region
+        apTsp = self.cApTimestamp
+        pktIndex = self.cPktIndex
+        column = self.cFileIndex
+        len_data = len(data)
+
+        # 功能实现 ###################################################
+        # 添加列索引
+        num = 0
+        for rgn in region:
+            num += (len(apTsp) + len(pktIndex)) * (len_data - rgn + 1)
+            # 时间跨度特征
+            for at in apTsp:
+                name_rgn_at = at + '_' + str(rgn)
+                data.insert(len(data.columns), name_rgn_at, None)
+            # 区间统计特征
+            for pidx in pktIndex:
+                name_rgn_pidx_avg = pidx + '_Avg_' + str(rgn)
+                data.insert(len(data.columns), name_rgn_pidx_avg, None)
+                name_rgn_pidx_std = pidx + '_Std_' + str(rgn)
+                data.insert(len(data.columns), name_rgn_pidx_std, None)
+        data_arr = data.values
+        # 计算特征
+        pbar = bar.ProgressBar(max_value=num)
+        ibar = [0]
+        for rgn in region:
+            # 时间跨度特征
+            for at in apTsp:
+                name_rgn_at = at + '_' + str(rgn)
+                iPktIndex = data.columns.tolist().index(at)
+                iRgnIndex = data.columns.tolist().index(name_rgn_at)
+                for i in range(rgn - 1, len_data):
+                    pbar.update(ibar[0])
+                    ibar[0] += 1
+                    data_arr[i, iRgnIndex] = np.around(data_arr[i, iPktIndex] - data_arr[i - rgn + 1, iPktIndex], 6)
+            # 区间统计特征
+            for pidx in pktIndex:
+                name_rgn_pidx_avg = pidx + '_Avg_' + str(rgn)
+                name_rgn_pidx_std = pidx + '_Std_' + str(rgn)
+                iPktIndex = data.columns.tolist().index(pidx)
+                iRgnAvg = data.columns.tolist().index(name_rgn_pidx_avg)
+                iRgnStd = data.columns.tolist().index(name_rgn_pidx_std)
+                for i in range(rgn - 1, len_data):
+                    pbar.update(ibar[0])
+                    ibar[0] += 1
+                    data_rgn = [d[iPktIndex] for d in data_arr[(i - rgn + 1):(i + 1)]]
+                    data_arr[i, iRgnAvg] = np.around(np.mean(data_rgn), 6)
+                    data_arr[i, iRgnStd] = np.around(np.std(data_rgn, ddof=1), 6)
+        if del_on:
+            data_arr = np.delete(arr=data_arr, obj=np.s_[0:(max(region) - 1)], axis=0)
+        data = pd.DataFrame(data=data_arr, columns=data.columns)
+
+        # 结果处理 ###################################################
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    ################################################################################################################
+    # 数据标注
+    def set_label(self, path_index: str, path_timestamp: str, print_on=False, to_csv_on=True):
+        """
+        设置标签
+
+        :param path_index: 特征数据文件路径
+        :param path_timestamp: 异常时间戳文件路径
+        :param print_on: 是否打印结果
+        :param to_csv_on: 是否输出csv文件
+        :return:
+        """
+        logging.info('Label setting ...')
+
+        # 变量定义 #######################################################################
+        index = pd.read_csv(filepath_or_buffer=path_index)
+        timestamp = pd.read_csv(filepath_or_buffer=path_timestamp)
+        index['Label'] = 0
+
+        # 功能实现 #######################################################################
+        for i, row in timestamp.iterrows():
+            if row['Type'] == 'caton':
+                start_time = row['Start_Time']
+                end_time = row['End_Time']
+                idx_true = ((index['T1']+index['T2'])/2 >= start_time) & ((index['T1']+index['T2'])/2 <= end_time)
+                index.loc[idx_true, 'Label'] = 1
+            elif row['Type'] == 'whole':
+                start_time = row['Start_Time']
+                end_time = row['End_Time']
+                idx_true = ((index['T1']+index['T2'])/2 >= start_time) & ((index['T1']+index['T2'])/2 <= end_time)
+                index = index[idx_true]
+
+        # 结果处理 #######################################################################
+        if print_on:
+            print(index)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_index), 'index_label')
+            index.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return index
+
+    ################################################################################################################
+    # 数据转换
+    def change_unit(self, filepath: str, column: list, coefficient: float):
+        """
+        数据单位转换
+
+        :param filepath: 数据文件路径
+        :param column: 待转换的条目
+        :param coefficient: 转换系数
+        :return: 转换后的数据
+        """
+        data = pd.read_csv(filepath_or_buffer=filepath)
+        data[column] = data[column] * coefficient
+        output_path, ext = os.path.splitext(filepath)
+        data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
+    def change_detection_frame_to_time(self, path_vtsp: str, path_bm: str, print_on=False, to_csv_on=True):
+        """
+        将帧标注转换为时间戳标注
+
+        :param path_vtsp: 视频时间戳文件路径
+        :param path_bm: 异常标注文件路径
+        :param print_on: 是否打印
+        :param to_csv_on: 是否输出csv文件
+        :return:
+        """
+        vtsp = pd.read_csv(filepath_or_buffer=path_vtsp,
+                           header=None,
+                           names=['Filepath', 'Start_Timestamp', 'End_Timestamp'])
+        btsp = pd.read_csv(filepath_or_buffer=path_bm)
+        btsp['Start_Timestamp'] = btsp['Start_Time'] + btsp['Start_Frame'] / 30 + vtsp.iloc[0, 1] / 1000
+        btsp['End_Timestamp'] = btsp['End_Time'] + btsp['End_Frame'] / 30 + vtsp.iloc[0, 1] / 1000
+        if print_on:
+            print(btsp)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_bm), 'log_bug_timestamp')
+            btsp.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return btsp
+
+    ################################################################################################################
+    # 其他
+    def combine_index(self, dir_ap_log: str, dir_pcap: str, print_on=False, to_csv_on=True):
+        """
+        合并ap端log提取指标和空口数据提取指标
+
+        :param dir_ap_log:
+        :param dir_pcap:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Index combine start.')
+        path_ap_index = os.path.join(dir_ap_log, 'index_tall')
+        path_pcap_index = os.path.join(dir_pcap, 'capture_info')
+        ap_index_arr = pd.read_csv(filepath_or_buffer=path_ap_index).values.tolist()
+        pcap_index_df = pd.read_csv(filepath_or_buffer=path_pcap_index)
+        pcap_index_df['Read'] = pcap_index_df['Retry'] * 0
+        pcap_index_df['Index'] = pcap_index_df['Retry'] * 0
+        pcap_index_arr = pcap_index_df.values.tolist()
+
+        iPcapRetry = self.columnPcapInfo.index('Retry')    # 5
+        iPcapSniffTimestamp = self.columnPcapInfo.index('Sniff_Timestamp')  # 6
+        iPcapRead = iPcapSniffTimestamp + 1     # 7
+        iPcapIdx = iPcapRead + 1                # 8
+        iIndexRetry = self.columnIndex.index('Retry')   # 22
+        len_ap_index = len(ap_index_arr)
+        len_pcap_index = len(pcap_index_arr)
+
+        obj_curr = [None] * self.nIndex
+        index_res = [obj_curr]
+
+        start = 0
+        while not (ap_index_arr[0][0:self.nPacketID] == pcap_index_arr[start][0:self.nPacketID]):
+            start += 1
+
+        for i in bar.progressbar(range(len_ap_index)):
+            obj_curr[0:self.nApIndex] = ap_index_arr[i][0:self.nApIndex]
+            flag = True
+            for j in range(start, len_pcap_index):
+                if pcap_index_arr[j][iPcapRead] == 0:
+                    if flag:
+                        start = j
+                        flag = False
+                    if ap_index_arr[i][0:self.nPacketID] == pcap_index_arr[j][0:self.nPacketID]:
+                        if not -15 < pcap_index_arr[j][iPcapSniffTimestamp] - ap_index_arr[i][self.nPacketID] < 15:
+                            obj_curr = [None] * self.nIndex
+                            break
+                        obj_curr[self.nApIndex:self.nIndex] = pcap_index_arr[j][self.nPacketID:self.nPcapIndex]
+                        pcap_index_arr[j][iPcapRead] = 1
+                        pcap_index_arr[j][iPcapIdx] = i
+                        dj = 0
+                        while dj < 20 and j + dj + 1 < len_pcap_index:
+                            dj += 1
+                            if pcap_index_arr[j+dj][iPcapRead] == 0 and (ap_index_arr[i][0:self.nPacketID] == pcap_index_arr[j+dj][0:self.nPacketID]):
+                                obj_curr[iIndexRetry] += pcap_index_arr[j+dj][iPcapRetry]
+                                pcap_index_arr[j+dj][iPcapRead] = 1
+                                pcap_index_arr[j+dj][iPcapIdx] = i
+                                j = j + dj
+                                dj = 0
+                        index_res.append(obj_curr)
+                        obj_curr = [None] * self.nIndex
+                        break
+        index_df = pd.DataFrame(data=index_res, columns=self.columnIndex)
+        pcap_index_df = pd.DataFrame(data=pcap_index_arr)
+
+        if print_on:
+            print(index_df)
+        if to_csv_on:
+            index_df.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index'), index=False, float_format="%.6f")
+            pcap_index_df.to_csv(path_or_buf=os.path.join(dir_pcap, 'capture_info_read'), index=False)
+        logging.info('Index combine complete.')
+        return index_df
 
     def extract_ap_index(self, dir_ap_log: str, print_on=False, to_csv_on=True):
         """
-        提取AP指标
+        提取AP端特征
 
-        :param dir_ap_log:
+        :param dir_ap_log: AP时间戳log目录
         :param print_on:
         :param to_csv_on:
         :return:
@@ -187,13 +722,15 @@ class DataUtils:
         # 提取指标T1-T0, T2-T1
         result = self.extract_delta_t(rt_tsp=rt_tsp)
         # 空值填充处理
-        result = self.fill_null_index(index_df=result)
+        result = self.fill_null_timestamp(data=result)
         # 删除空数据所在行
         result = self.delete_null_data(data=result)
         # 筛选TCP数据
         result = self.filter(filepath_or_dataframe=result, key='Protocol', value=6)
+        # 筛选源地址
+        src = result['Source'].value_counts().idxmax()
+        result = self.filter(filepath_or_dataframe=result, key='Source', value=src)
         # 提取指标T2_T0_Sync
-        logging.info('Extract index: T2-T0')
         result.insert(14, 'T2_T0_Sync', result['T1_T0_Sync'] + result['T2_T1_Sync'])
         # 提取指标T0_100, T0_200, T0_500, T0_1000, T0_2000
         result = self.extract_tx_n(data=result, insert_i=15, column_name='T0_100', index_name='T0_Sync', index_i=4, numstep=100, delete_on=False)
@@ -201,6 +738,8 @@ class DataUtils:
         result = self.extract_tx_n(data=result, insert_i=17, column_name='T0_500', index_name='T0_Sync', index_i=4, numstep=500, delete_on=False)
         result = self.extract_tx_n(data=result, insert_i=18, column_name='T0_1000', index_name='T0_Sync', index_i=4, numstep=1000, delete_on=False)
         result = self.extract_tx_n(data=result, insert_i=19, column_name='T0_2000', index_name='T0_Sync', index_i=4, numstep=2000)
+        # 提取指标Retry_ID
+        result = self.extract_retry_id(data=result, insert_i=20, column_name='Retry_ID')
 
         if print_on:
             print(result)
@@ -208,17 +747,18 @@ class DataUtils:
             result.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index_tall'), index=False)
         return result
 
-    def extract_capture_info(self, filepath: str, print_on=False, to_csv_on=True):
+    def extract_capture_info(self, filepath: str, output_path: str, print_on=False, to_csv_on=True):
         """
         提取抓包信息
 
         :param filepath:
+        :param output_path:
         :param print_on:
         :param to_csv_on:
         :return:
         """
         # logging.info('Capture info extract start.')
-        column = self.columnInfo
+        column = self.columnPcapInfo
         capture = self.import_capture(filepath=filepath, keep_packets=False)
         pgb = bar.ProgressBar()
         info_list = []
@@ -257,7 +797,7 @@ class DataUtils:
             print(info_list)
         if to_csv_on:
             info_df = pd.DataFrame(data=info_list, columns=column)
-            info_df.to_csv(path_or_buf=os.path.join(os.path.dirname(filepath), 'capture_info'), index=False)
+            info_df.to_csv(path_or_buf=output_path, index=False)
         # logging.info('Capture info extract complete.')
         return info_list
 
@@ -382,6 +922,109 @@ class DataUtils:
                 index_df.to_csv(path_or_buf=output_path, index=False)
         return index_df
 
+    def extract_index_by_window(self, filepath: str, window_size=1000, percentage=95, print_on=False, to_csv_on=True):
+        """
+        滑动窗口法提取特征（统计特征：均值，标准差；区间特征：跨度）
+
+        :param filepath: 单包特征文件路径
+        :param window_size: 滑动窗口大小
+        :param percentage: 标记判定阈值
+        :param print_on: 是否打印结果
+        :param to_csv_on: 是否输出文件
+        :return:
+        """
+        logging.info('Extract index by window(' + str(window_size) + ', ' + str(percentage) + '%).')
+        data = pd.read_csv(filepath_or_buffer=filepath)
+        columns = data.columns.values.tolist()
+        len_columns = len(columns)
+        data = data.values.tolist()
+        len_data = len(data)
+        columns_res = []
+        # 统计特征（均值，标准差）的指标
+        statistic_index_list = ['T1_T0_Sync', 'T2_T1_Sync', 'T2_T0_Sync', 'Length', 'Retry']
+        stat_idx_list = []
+        for index in statistic_index_list:
+            if index in columns:
+                stat_idx_list.append(columns.index(index))
+                columns_res.append(index + '_' + str(window_size) + '_Avg')
+                columns_res.append(index + '_' + str(window_size) + '_Std')
+            else:
+                logging.error('Incorrect index name: ' + index)
+                return None
+        # 区间特征（跨度）的指标
+        region_index_list = ['T0_Sync']
+        reg_idx_list = []
+        for index in region_index_list:
+            if index in columns:
+                reg_idx_list.append(columns.index(index))
+                columns_res.append(index + '_' + str(window_size) + '_Len')
+            else:
+                logging.error('Incorrect index name: ' + index)
+                return None
+        label_idx = columns.index('Label')
+        columns_res.append('Label')
+
+        result = []
+        index_temp = []
+        for i in bar.progressbar(range(len_data-window_size+1)):   # len_data-window_size+1
+            for idx in stat_idx_list:
+                reg_data = [d[idx] for d in data[i:(i+window_size)]]
+                index_temp.append(np.mean(reg_data))
+                index_temp.append(np.std(reg_data, ddof=1))
+            for idx in reg_idx_list:
+                index_temp.append(data[i+window_size-1][idx] - data[i][idx])
+            if percentage == 0:
+                index_temp.append(data[i+window_size-1][label_idx])
+            else:
+                reg_data = [d[label_idx] for d in data[i:(i + window_size)]]
+                if np.mean(reg_data) < percentage / 100:
+                    index_temp.append(0)
+                else:
+                    index_temp.append(1)
+            result.append(index_temp)
+            index_temp = []
+        result = pd.DataFrame(data=result, columns=columns_res)
+
+        if print_on:
+            print(result)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(filepath), 'index_label_region_' + str(window_size) + '_' + str(percentage) + '%')
+            result.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return result
+
+    def extract_retry_id(self, data: pd.DataFrame, insert_i: int, column_name: str, output_path=None, print_on=False, to_csv_on=False):
+        """
+        提取指标Retry_ID
+
+        :param data:
+        :param insert_i:
+        :param column_name:
+        :param output_path:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Extract index: Retry_ID')
+        ID_DISTANCE = 32768
+        id_max = int(data.iloc[0, 2][:-4], 16)
+        id_list = data['ID&Fragment'].values.tolist()
+        res_list = [0] * len(id_list)
+        # IP id分析
+        for idx in bar.progressbar(range(len(id_list))):
+            id_now = int(id_list[idx][:-4], 16)
+            if (id_now > id_max and id_now - id_max < ID_DISTANCE) or (
+                    id_now < id_max and id_max - id_now > ID_DISTANCE):
+                id_max = id_now
+            else:
+                res_list[idx] = 1
+        data.insert(insert_i, column_name, res_list)
+
+        if print_on:
+            print(data)
+        if to_csv_on:
+            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+        return data
+
     def extract_t0_100(self, data: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
         提取指标T1_100
@@ -453,74 +1096,6 @@ class DataUtils:
             data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return data
 
-    def fill_null_index(self, index_df: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
-        """
-        空值填充处理
-
-        :param index_df: 指标数据文件路径
-        :param output_path: 保存路径
-        :param print_on: 是否打印结果
-        :param to_csv_on: 是否输出csv文件
-        :return: 处理后数据
-        """
-        column = self.columnIndex[0:14]
-        # index_df = pd.read_csv(filepath_or_buffer=filepath)
-        len_index = len(index_df)
-        index_arr = index_df.values
-        # 处理T0空值
-        for i in range(0, len_index):
-            if pd.isna(index_arr[i, 4]):
-                n = 0
-                for j in range(i, len_index):
-                    if pd.isna(index_arr[j, 4]):
-                        n = n + 1
-                    else:
-                        break
-                for k in range(1, n + 1):
-                    index_arr[i - 1 + k, 4] = np.around((index_arr[i - 2 + k, 4] + index_arr[i - 1 + k, 6]) / 2, 6)
-                    index_arr[i - 1 + k, 5] = np.around((index_arr[i - 2 + k, 5] + index_arr[i - 1 + k, 7]) / 2, 6)
-                    index_arr[i - 1 + k, 10] = np.around(index_arr[i - 1 + k, 6] - index_arr[i - 1 + k, 4], 6)
-                    index_arr[i - 1 + k, 11] = np.around(index_arr[i - 1 + k, 7] - index_arr[i - 1 + k, 5], 6)
-            # if pd.isna(index_arr[i, 14]):
-            #     index_arr[i, 14] = 0
-        index_fill_df = pd.DataFrame(data=index_arr, columns=column)
-        if print_on:
-            print(index_fill_df)
-        if to_csv_on:
-            # output_path = os.path.join(os.path.dirname(filepath), os.path.basename(filepath) + '_fill')
-            index_fill_df.to_csv(path_or_buf=output_path, index=False)
-        return index_fill_df
-
-    def filter(self, filepath_or_dataframe, key: str, value, output_path=None, print_on=False, to_csv_on=False):
-        """
-        筛选某一属性为特定值的数据
-
-        :param filepath_or_dataframe: 文件路径或数据
-        :param key: 属性名称
-        :param value: 属性值
-        :param print_on: 是否打印
-        :param to_csv_on: 是否输出为csv文件
-        :param savepath: 保存路径
-        :return: 筛选后的数据表
-        """
-        if type(filepath_or_dataframe) is str:
-            data = pd.read_csv(filepath_or_buffer=filepath_or_dataframe)
-        elif type(filepath_or_dataframe) is pd.DataFrame:
-            data = filepath_or_dataframe
-        else:
-            logging.error('Parameter(filepath_or_dataframe) is error!')
-            return None
-        if key in data.columns:
-            data = data[data[key] == value]
-        else:
-            logging.error('The key is not in data!')
-            return None
-        if print_on:
-            print(data)
-        if to_csv_on:
-            data.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
-        return data
-
     def import_capture(self, filepath: str, only_summaries=False, keep_packets=True, use_json=True):
         """
         空口数据导入
@@ -548,40 +1123,7 @@ class DataUtils:
         """
         router_timestamp = pd.read_csv(filepath_or_buffer=filepath,
                                        header=None,
-                                       names=self.columnTimestamp)
+                                       names=self.columnApTimestamp)
         if print_on:
             print(router_timestamp)
         return router_timestamp
-
-    def set_label(self, index_filepath: str, bug_filepath: str, print_on=False, to_csv_on=True):
-        """
-        设置标签
-
-        :param index_filepath: 特征数据文件路径
-        :param bug_filepath: 异常时间戳文件路径
-        :param print_on: 是否打印结果
-        :param to_csv_on: 是否输出csv文件
-        :return:
-        """
-        logging.info('Label set start.')
-        index_df = pd.read_csv(filepath_or_buffer=index_filepath)
-        bug_df = pd.read_csv(filepath_or_buffer=bug_filepath)
-        index_df['Label'] = 0
-        for i, row in bug_df.iterrows():
-            if row['Type'] == 'caton':
-                start_time = row['Start_Time']
-                end_time = row['End_Time']
-                index_df.loc[((index_df['T1_Sync'] + index_df['T2_Sync']) / 2 >= start_time) & (
-                            (index_df['T1_Sync'] + index_df['T2_Sync']) / 2 <= end_time), 'Label'] = 1
-            elif row['Type'] == 'whole':
-                start_time = row['Start_Time']
-                end_time = row['End_Time']
-                index_df = index_df[((index_df['T1_Sync'] + index_df['T2_Sync']) / 2 >= start_time) & (
-                            (index_df['T1_Sync'] + index_df['T2_Sync']) / 2 <= end_time)]
-        if print_on:
-            print(index_df)
-        if to_csv_on:
-            output_path = os.path.join(os.path.dirname(index_filepath), 'index_label')
-            index_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
-        logging.info('Label set complete.')
-        return index_df

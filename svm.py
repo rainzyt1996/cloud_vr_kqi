@@ -8,9 +8,9 @@ import pandas as pd
 import program_logging
 # from sklearn import datasets
 from sklearn import svm
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from thundersvm import SVC
 import time
 
@@ -51,31 +51,30 @@ def example_svm():
     print("The accuracy score is %f" % score)
 
 
-def test_svm(test_index: str):
+def test_svm(path_data: str, index_list: list):
     # 创建log路径
     time_log = time.localtime()
-    dir_log = 'train/7_t2_t0_test/only_t2_t0/' + time.strftime("%Y%m%d%H%M%S", time_log)
-    os.mkdir(dir_log)
+    dir_log = 'train/11_reset_label/' + time.strftime("%Y%m%d%H%M%S", time_log)
+    os.makedirs(name=dir_log, exist_ok=True)
     dir_result = dir_log + '/result_predict'
-    os.mkdir(dir_result)
+    os.makedirs(name=dir_result, exist_ok=True)
 
     # 导入数据集
     logging.info('Preparing datasets...')
-    path_data = 'data/data_20210723/data_video/data_video_1/data_video_1_1/ap_log_video_1_1/index_label_simple_test'
     data_df = pd.read_csv(filepath_or_buffer=path_data)
-    index_name_list = ['T2_T0_Sync', test_index, 'Length', 'Retry']     # 'T1_T0_Sync', 'T2_T1_Sync', 'T0_100', 'Length', 'Retry'
     num_train = int(len(data_df) / 3 * 2)
     num_test = len(data_df) - num_train
-    train_features = data_df.loc[:, index_name_list].values[:num_train, :]
+    train_features = data_df.loc[:, index_list].values[:num_train, :]
     train_labels = data_df.loc[:, 'Label'].values[:num_train]
-    test_features = data_df.loc[:, index_name_list].values[num_train:num_train+num_test, :]
+    test_features = data_df.loc[:, index_list].values[num_train:num_train+num_test, :]
     test_labels = data_df.loc[:, 'Label'].values[num_train:num_train+num_test]
     logging.info('Train data number: %d', num_train)
     logging.info('Test data number: %d', num_test)
-    logging.info('Index list: ' + ', '.join(index_name_list))
+    logging.info('Index list: ' + ', '.join(index_list))
 
     # 数据预处理
     scaler = MinMaxScaler()
+    # scaler = StandardScaler()
     train_features = scaler.fit_transform(train_features)
     test_features = scaler.fit_transform(test_features)
 
@@ -91,11 +90,11 @@ def test_svm(test_index: str):
     file.write('****** Train Log ******\n')
     file.write('[Record time] ' + time.strftime("%Y-%m-%d %H:%M:%S", time_log) + '\n')
     file.write('*** Dataset ***\n')
-    file.write('[Dataset] data/data_20210723/data_video/data_video_1/data_video_1_1\n')
-    file.write('[Train data] data_video_1_1[0:' + str(num_train) + ']\n')
-    file.write('[Test data] data_video_1_1[' + str(num_train) + ':' + str(num_train+num_test) + ']\n')
-    file.write('[Index] ' + ', '.join(index_name_list) + '\n')
-    file.write('[Preprocessing] MinMaxScaler\n')
+    file.write('[Dataset] ' + os.path.dirname(os.path.dirname(path_data)) + '\n')
+    file.write('[Train data] ' + str(num_train) + ' (0:' + str(num_train) + ')\n')
+    file.write('[Test data] ' + str(num_test) + ' (' + str(num_train) + ':' + str(num_train+num_test) + ')\n')
+    file.write('[Index] ' + ', '.join(index_list) + '\n')
+    file.write('[Preprocessing] ' + str(type(scaler)) + '\n')
     file.write('*** Model ***\n')
     file.write('[Model] thundersvm.SVC()\n')
     file.write('[Parameter] \n')
@@ -108,7 +107,7 @@ def test_svm(test_index: str):
     # 开始训练，保存训练结果
     logging.info('Start training...')
     path_log = dir_log + '/result_log.csv'
-    column = ['kernel', 'c', 'gamma', 'degree', 'Time_Train', 'Time_Predict', 'Accuracy', 'Precision', 'Recall', 'F1']
+    column = ['kernel', 'c', 'gamma', 'degree', 'Time_Train', 'Time_Predict', 'Accuracy', 'Precision', 'Recall', 'F1', 'FPR', 'TPR', 'Thresholds']
     result_info = []
     for c in param_c:
         for gamma in param_gamma:
@@ -128,8 +127,9 @@ def test_svm(test_index: str):
                 precision = precision_score(test_labels, test_predict)
                 recall = recall_score(test_labels, test_predict)
                 f1 = f1_score(test_labels, test_predict)
+                fpr, tpr, thresholds = roc_curve(test_labels, test_predict)
                 # 记录结果
-                result_info.append([kernel, c, gamma, degree, time_train, time_predict, accuracy, precision, recall, f1])
+                result_info.append([kernel, c, gamma, degree, time_train, time_predict, accuracy, precision, recall, f1, fpr, tpr, thresholds])
                 # # 保存结果
                 result = pd.DataFrame(data=test_predict, columns=['Predict'])
                 result_filename = 'result_' + kernel + '_' + str(c) + '_' + str(gamma) + '_' + str(degree)
