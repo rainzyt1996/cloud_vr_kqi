@@ -198,6 +198,116 @@ class DataUtils:
             data_res_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return data_res_df
 
+    def extract_cap_info(self, filepath: str, output_path: str, print_on=False, to_csv_on=True):
+        """
+        提取抓包信息
+
+        :param filepath:
+        :param output_path:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Capture info extracting ...')
+        column = self.columnPcapInfo
+        capture = self.import_capture(filepath=filepath, keep_packets=False)
+        pgb = bar.ProgressBar()
+        info_list = []
+        i = [0]
+
+        def ip2int(ip: str):
+            return sum([256 ** m * int(n) for m, n in enumerate(ip.split('.')[::1])])
+
+        def combine_id_flags(ipid: str, flags: str):
+            return '0x' + ipid[-4:] + flags[-2:] + flags[-4:-2]
+
+        def get_packet_info(packet):
+            if 'wlan_aggregate' in dir(packet):
+                if isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], dict):
+                    a_msdu_subframe = [packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']]
+                elif isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], list):
+                    a_msdu_subframe = packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']
+                else:
+                    logging.error('wlan_aggregate error: %d', i[0])
+                    return
+                for subframe in a_msdu_subframe:
+                    if 'ip' in subframe:
+                        info = [ip2int(subframe['ip']['ip.src']),
+                                ip2int(subframe['ip']['ip.dst']),
+                                combine_id_flags(subframe['ip']['ip.id'], subframe['ip']['ip.flags']),
+                                subframe['ip']['ip.proto'],
+                                subframe['wlan_aggregate.a_mdsu.length'],
+                                packet.wlan.fc_tree.flags_tree.retry,
+                                packet.sniff_timestamp]
+                        info_list.append(info)
+            i[0] += 1
+            pgb.update(i[0])
+
+        capture.apply_on_packets(get_packet_info)
+        print('\n')
+        if print_on:
+            print(info_list)
+        if to_csv_on:
+            info_df = pd.DataFrame(data=info_list, columns=column)
+            info_df.to_csv(path_or_buf=output_path, index=False)
+        return info_list
+
+    def extract_cap_stm_info(self, filepath: str, filter: str, output_path: str, print_on=False, to_csv_on=True):
+        """
+        提取抓包业务流信息（HTTP上行报文）
+
+        :param filepath:
+        :param filter:
+        :param output_path:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Capture stream info extracting ...')
+
+        # 变量定义 ################################################################
+        cap_filter = 'ip.src == 192.168.137.160 && http'
+        capture = FileCapture(input_file=filepath,
+                              display_filter=filter,
+                              only_summaries=False,
+                              keep_packets=False,
+                              use_json=True)
+        column = ['Source', 'Destination', 'ID&Fragment', 'Protocol', 'Sniff_Timestamp']
+        info_list = []
+        pgb = bar.ProgressBar()
+        i = [0]
+
+        # 函数定义 ################################################################
+        def ip2int(ip: str):
+            return sum([256 ** m * int(n) for m, n in enumerate(ip.split('.')[::1])])
+
+        def combine_id_flags(ipid: str, flags: str):
+            return '0x' + ipid[-4:] + flags[-2:] + flags[-4:-2]
+
+        def get_packet_info(packet):
+            if 'ip' in packet:
+                info = [ip2int(packet.ip.src),
+                        ip2int(packet.ip.dst),
+                        combine_id_flags(packet.ip.id, packet.ip.flags),
+                        packet.ip.proto,
+                        packet.sniff_timestamp]
+                info_list.append(info)
+            else:
+                info_list.append([-1, -1, -1, -1, -1])
+            i[0] += 1
+            pgb.update(i[0])
+
+        # 功能实现 ################################################################
+        capture.apply_on_packets(get_packet_info)
+
+        # 结果处理 ################################################################
+        if print_on:
+            print(info_list)
+        if to_csv_on:
+            info_df = pd.DataFrame(data=info_list, columns=column)
+            info_df.to_csv(path_or_buf=output_path, index=False)
+        return info_list
+
     def combine_pkt_data(self, path_ap_pkt_data: str, path_cap_info: str, print_on=False, to_csv_on=True):
         """
         合并单包数据
@@ -255,10 +365,13 @@ class DataUtils:
         oPkgIdEnd = oPrt + 1
         oApPkgDataEnd = oT2 + 1
         oEnd = oRty + 1
+        idxApBgn = 0    # AP端搜索起始索引
         idxCapBgn = 0   # 抓包端搜索起始索引
 
         # 功能实现 ################################################
-        while not (data_ap[0][iApSrc:iApPkgIdEnd] == data_cap[idxCapBgn][iCapSrc:iCapPkgIdEnd]):
+        while idxApBgn < len_data_ap and data_ap[idxApBgn][iApPrt] != 6:
+            idxApBgn += 1
+        while idxCapBgn < len_data_cap and not (data_ap[idxApBgn][iApSrc:iApPkgIdEnd] == data_cap[idxCapBgn][iCapSrc:iCapPkgIdEnd]):
             idxCapBgn += 1
         for i in bar.progressbar(range(len_data_ap)):
             obj_curr[oSrc:oApPkgDataEnd] = data_ap[i][iApSrc:iApEnd]
@@ -746,60 +859,6 @@ class DataUtils:
         if to_csv_on:
             result.to_csv(path_or_buf=os.path.join(dir_ap_log, 'index_tall'), index=False)
         return result
-
-    def extract_capture_info(self, filepath: str, output_path: str, print_on=False, to_csv_on=True):
-        """
-        提取抓包信息
-
-        :param filepath:
-        :param output_path:
-        :param print_on:
-        :param to_csv_on:
-        :return:
-        """
-        # logging.info('Capture info extract start.')
-        column = self.columnPcapInfo
-        capture = self.import_capture(filepath=filepath, keep_packets=False)
-        pgb = bar.ProgressBar()
-        info_list = []
-        i = [0]
-
-        def ip2int(ip: str):
-            return sum([256 ** m * int(n) for m, n in enumerate(ip.split('.')[::1])])
-
-        def combine_id_flags(ipid: str, flags: str):
-            return '0x' + ipid[-4:] + flags[-2:] + flags[-4:-2]
-
-        def get_packet_info(packet):
-            if 'wlan_aggregate' in dir(packet):
-                if isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], dict):
-                    a_msdu_subframe = [packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']]
-                elif isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], list):
-                    a_msdu_subframe = packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']
-                else:
-                    logging.error('wlan_aggregate error: %d', i[0])
-                    return
-                for subframe in a_msdu_subframe:
-                    if 'ip' in subframe:
-                        info = [ip2int(subframe['ip']['ip.src']),
-                                ip2int(subframe['ip']['ip.dst']),
-                                combine_id_flags(subframe['ip']['ip.id'], subframe['ip']['ip.flags']),
-                                subframe['ip']['ip.proto'],
-                                subframe['wlan_aggregate.a_mdsu.length'],
-                                packet.wlan.fc_tree.flags_tree.retry,
-                                packet.sniff_timestamp]
-                        info_list.append(info)
-            i[0] += 1
-            pgb.update(i[0])
-
-        capture.apply_on_packets(get_packet_info)
-        if print_on:
-            print(info_list)
-        if to_csv_on:
-            info_df = pd.DataFrame(data=info_list, columns=column)
-            info_df.to_csv(path_or_buf=output_path, index=False)
-        # logging.info('Capture info extract complete.')
-        return info_list
 
     def extract_delta_t(self, rt_tsp: pd.DataFrame, output_path=None, print_on=False, to_csv_on=False):
         """
