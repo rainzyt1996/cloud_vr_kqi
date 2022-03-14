@@ -26,7 +26,7 @@ from torch.utils.data import *
 from torch.utils.tensorboard import SummaryWriter
 
 torch.manual_seed(1)
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
 
 class TestLinear(nn.Module):
@@ -149,18 +149,18 @@ def evaluate(tfpn: list):
     return accuracy, precision, recall, f1, tpr, fpr
 
 
-def data_preprocess(filepath: str, time_step: int, batch_size=1, delta=0):
+def data_preprocess(filepath: str, index_list: list, time_step: int, batch_size=1, delta=0):
     """
     数据预处理
 
     :param filepath: 数据文件路径（包括特征及标签）
-    :param batch_size:
+    :param index_list:
     :param time_step: 序列片段长度
     :param delta: 取片段偏移
     :return:
     """
     file_df = pd.read_csv(filepath_or_buffer=filepath)
-    data_df = file_df.loc[:, 'Length':'Retry_Std_2000']
+    data_df = file_df.loc[:, index_list]
     data_df = (data_df - data_df.min()) / (data_df.max() - data_df.min())
     data = data_df.values
     label = file_df['Label'].values
@@ -192,13 +192,9 @@ def data_preprocess(filepath: str, time_step: int, batch_size=1, delta=0):
 def train():
     # 文件准备 ######################################################################
     time_now = time.strftime('%Y%m%d%H%M%S', time.localtime())
-    dir_root = 'train'
-    dir_train = os.path.join(dir_root, '12_model')
-    if not os.path.exists(dir_train):
-        os.mkdir(dir_train)
-    dir_result = os.path.join(dir_train, time_now)
-    if not os.path.exists(dir_result):
-        os.mkdir(dir_result)
+    model_name = 'LSTM'     # LSTM, MyNet
+    dir_result = 'train/17_ts_pkt/' + model_name + '/' + time_now
+    os.makedirs(name=dir_result, exist_ok=True)
     dir_tensorboard = os.path.join(dir_result, 'runs')
     path_log = os.path.join(dir_result, 'log')
     path_loss_train = os.path.join(dir_result, 'loss_train')
@@ -222,20 +218,17 @@ def train():
     time_step = 1000
     batch_size = 8
     delta = time_step - 1000
-    train_filepath_1 = 'data/data_video/v1/v1_1/v1_1_1/ap_log_v1_1_1/index_label'
-    train_filepath_2 = 'data/data_video/v5/v5_1/v5_1_1/ap_log_v5_1_1/index_label'
-    test_filepath = 'data/data_video/v6/v6_1/v6_1_1/ap_log_v6_1_1/index_label'
-    train_data_1, train_label_1 = data_preprocess(filepath=train_filepath_1,
-                                                  time_step=time_step,
-                                                  batch_size=batch_size,
-                                                  delta=delta)
-    train_data_2, train_label_2 = data_preprocess(filepath=train_filepath_2,
-                                                  time_step=time_step,
-                                                  batch_size=batch_size,
-                                                  delta=delta)
-    train_data = np.concatenate((train_data_1, train_data_2), axis=0)
-    train_label = np.concatenate((train_label_1, train_label_2), axis=0)
+    train_filepath = 'data/data_video/vall/index_ts_label1_v1_v10_0&1_1&2'
+    test_filepath = 'data/data_video/vall/index_ts_label0_v11_v13_0&1_1&2'
+    index_list = pd.read_csv(filepath_or_buffer='data/data_video/vall/mrmr/feature_selection.txt',
+                             header=None).values.tolist()[0]
+    train_data, train_label = data_preprocess(filepath=train_filepath,
+                                              index_list=index_list,
+                                              time_step=time_step,
+                                              batch_size=batch_size,
+                                              delta=delta)
     test_data, test_label = data_preprocess(filepath=test_filepath,
+                                            index_list=index_list,
                                             time_step=time_step,
                                             batch_size=batch_size)
     num_feature = train_data.shape[2]
@@ -251,8 +244,7 @@ def train():
     file_log.write('****** Dataset ******\n')
     file_log.write('num_feature=' + str(num_feature) + '\n')
     file_log.write('[Train Data]\n')
-    file_log.write(train_filepath_1 + '\n')
-    file_log.write(train_filepath_2 + '\n')
+    file_log.write(train_filepath + '\n')
     file_log.write('[Test Data]\n')
     file_log.write(test_filepath + '\n')
 
@@ -265,7 +257,6 @@ def train():
     loss_type = 'CrossEntropyLoss'     # CrossEntropyLoss, BCEWithLogitsLoss
     loss_weight = torch.tensor(data=[w_neg, w_pos], dtype=torch.float32).to(device)
     epochs = 1000
-    model_name = 'LSTM'     # LSTM, MyNet
     if model_name == 'LSTM':
         model = LSTM(input_size=num_feature,
                      hidden_dim=hidden_dim,
@@ -476,17 +467,19 @@ def get_test_dataloader():
     return (train_dataloader, test_dataloader), NUM_FEATURE
 
 
-def get_real_dataloader():
+def get_real_dataloader(batch_size: int):
     """
     实际数据
 
     :return:
     """
-    BATCH_SIZE = 100
+    # BATCH_SIZE = 100
+    index_list = pd.read_csv(filepath_or_buffer='data/data_video/vall/mrmr/feature_selection.txt',
+                             header=None).values.tolist()[0]
     # 训练集
-    filepath = 'data/data_video/v1/v1_1/v1_1_1/ap_log_v1_1_1/index_label'
+    filepath = 'data/data_video/vall/index_ts_label1_v1_v10_0&1_1&2'
     file_df = pd.read_csv(filepath_or_buffer=filepath)
-    data_df = file_df.loc[:, 'Length':'Retry_Std_2000']
+    data_df = file_df.loc[:, index_list]
     num_feature = data_df.shape[1]
     data_avg = data_df.mean()
     data_std = data_df.std()
@@ -496,17 +489,17 @@ def get_real_dataloader():
     label = torch.from_numpy(file_df['Label'].values)
     dataset = TensorDataset(data, label)
     sampler = RandomSampler(dataset)
-    train_dataloader = DataLoader(dataset, sampler=sampler, batch_size=BATCH_SIZE, drop_last=True)
+    train_dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size, drop_last=True)
     # 测试集
-    filepath = 'data/data_video/v6/v6_1/v6_1_1/ap_log_v6_1_1/index_label'
+    filepath = 'data/data_video/vall/index_ts_label0_v11_v13_0&1_1&2'
     file_df = pd.read_csv(filepath_or_buffer=filepath)
-    data_df = file_df.loc[:, 'Length':'Retry_Std_2000']
+    data_df = file_df.loc[:, index_list]
     data_df = (data_df - data_avg) / data_std
     data = torch.FloatTensor(data_df.values)
     label = torch.from_numpy(file_df['Label'].values)
     dataset = TensorDataset(data, label)
     sampler = SequentialSampler(dataset)
-    test_dataloader = DataLoader(dataset, sampler=sampler, batch_size=BATCH_SIZE, drop_last=True)
+    test_dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size, drop_last=True)
     return (train_dataloader, test_dataloader), num_feature
 
 
@@ -529,12 +522,12 @@ def test_model():
     writer = SummaryWriter(dir_tensorboard)
 
     # 测试数据
-    (train_dataloader, test_dataloader), NUM_FEATURE = get_real_dataloader()
+    (train_dataloader, test_dataloader), NUM_FEATURE = get_real_dataloader(BATCH_SIZE)
 
     # 测试模型
     # model = TestLinear(NUM_FEATURE, HIDDEN_SIZE, 2).to(device)
-    # model = TestLstm(NUM_FEATURE, HIDDEN_SIZE, BATCH_SIZE).to(device)
-    model = MyNet(NUM_FEATURE, HIDDEN_SIZE, 2).to(device)
+    model = TestLstm(NUM_FEATURE, HIDDEN_SIZE, BATCH_SIZE).to(device)
+    # model = MyNet(NUM_FEATURE, HIDDEN_SIZE, 2).to(device)
     print(model)
     optimizer = optim.Adam(model.parameters())
 
@@ -582,5 +575,6 @@ def test_model():
 
     writer.close()
 
-# if __name__ == '__main__':
-#     test_model()
+
+if __name__ == '__main__':
+    train()

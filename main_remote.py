@@ -119,7 +119,7 @@ def data_processing():
 
 
 if __name__ == '__main__':
-    # data_utils = DataUtils()
+    data_utils = DataUtils()
 
     # 获取路径
     # ap_log_dir_list, bug_time_dir_list, pcap_wifi_path_list, pcap_wan_path_list = get_path()
@@ -131,12 +131,12 @@ if __name__ == '__main__':
     # tsne.test_tsne()
 
     # 训练
-    # ap_log_dir = ap_log_dir_list[0]
-    # path_data = os.path.join(ap_log_dir, 'index_label')
-    # index_list = data_utils.cIndex
-    # svm.test_svm(path_data=path_data, index_list=index_list)
+    path_train_data = 'data/data_video/v1/v1_1/v1_1_1/ap_log_v1_1_1/feature_label'
+    path_test_data = 'data/data_video/v6/v6_1/v6_1_1/ap_log_v6_1_1/feature_label'
+    index_list = data_utils.cFeature
+    svm.test_svm(path_train_data=path_train_data, path_test_data=path_test_data, index_list=index_list)
     # model.train()
-    model.test_model()
+    # model.test_model()
 
     # 测试
     # print('test')

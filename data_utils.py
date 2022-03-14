@@ -41,29 +41,35 @@ class DataUtils:
         # 数据项
         self.cPktId = ['Source', 'Destination', 'ID&Fragment', 'Protocol']    # 包标识
         self.cApTimestamp = ['T0', 'T1', 'T2']    # AP端时间戳
+        self.cStmData = ['Number', 'SumLength', 'TimeInterval']     # 流统计数据
         # 特征项
-        self.cApPktIndex = ['T1_T0', 'T2_T1', 'T2_T0']  # AP端单包特征
-        self.cCapPktIndex = ['Length', 'Retry']     # 抓包端单包特征
-        self.cPktIndex = self.cApPktIndex + self.cCapPktIndex    # 单包特征
+        self.cApPktFeature = ['T1_T0', 'T2_T1', 'T2_T0']  # AP端单包特征
+        self.cCapPktFeature = ['Length', 'Retry']     # 抓包端单包特征
+        self.cPktFeature = self.cApPktFeature + self.cCapPktFeature    # 单包特征
         self.region = [100, 200, 500, 1000, 2000]  # 区间值
-        self.cRgnSpnIndex = []  # 区间跨度特征
-        self.cRgnSttIndex = []  # 区间统计特征
+        self.cRgnSpnFeature = []  # 区间跨度特征
+        self.cRgnSttFeature = []  # 区间统计特征
         for rgn in self.region:
             for item in self.cApTimestamp:
-                self.cRgnSpnIndex.append(item + '_' + str(rgn))
-            for item in self.cPktIndex:
-                self.cRgnSttIndex.append(item + '_Avg_' + str(rgn))
-                self.cRgnSttIndex.append(item + '_Std_' + str(rgn))
-        self.cRgnIndex = self.cRgnSpnIndex + self.cRgnSttIndex  # 区间特征
-        self.cIndex = self.cPktIndex + self.cRgnIndex   # 特征
+                self.cRgnSpnFeature.append(item + '_' + str(rgn))
+            for item in self.cPktFeature:
+                self.cRgnSttFeature.append(item + '_Avg_' + str(rgn))
+                self.cRgnSttFeature.append(item + '_Std_' + str(rgn))
+        self.cRgnFeature = self.cRgnSpnFeature + self.cRgnSttFeature  # 区间特征
+        self.cLocalFeature = self.cPktFeature + self.cRgnFeature   # 局部特征
+        self.cStmFeature = ['PacketRate', 'DataRate']  # 流特征
+        self.cFeature = self.cLocalFeature + self.cStmFeature   # 特征
         # 文件信息项
         self.cFileApLog = ['Tn'] + self.cPktId + ['Time_Sync', 'Time_Local']   # AP端时间戳Log
-        self.cFileCapInfo = self.cPktId + self.cCapPktIndex + ['Sniff_Timestamp']    # 抓包端信息
+        self.cFileCapInfo = self.cPktId + self.cCapPktFeature + ['Sniff_Timestamp']    # 抓包端信息
+        self.cFileWanStmInfo = self.cPktId + ['Length', 'Sniff_Timestamp']     # WAN口流数据信息
         self.cFileApPktData = self.cPktId + self.cApTimestamp    # AP端合并时间戳Log
-        self.cFilePktData = self.cFileApPktData + self.cCapPktIndex  # 单包数据
-        self.cFilePktIndex = self.cFilePktData + self.cApPktIndex     # 单包特征
-        self.cFileIndex = self.cFilePktIndex + self.cRgnIndex   # 特征
-        self.cFileIdxLabel = self.cFileIndex + ['Label']    # 带标签的特征
+        self.cFilePktData = self.cFileApPktData + self.cCapPktFeature  # 单包数据
+        self.cFilePktFeature = self.cFilePktData + self.cApPktFeature     # 单包特征
+        self.cFileLcFeature = self.cFilePktFeature + self.cRgnFeature   # 局部特征
+        self.cFileLcFeatLabel = self.cFileLcFeature + ['Label']    # 带标签的局部特征
+        self.cFileFeature = self.cFileLcFeature + self.cStmFeature  # 特征
+        self.cFileFeatLabel = self.cFileFeature + ['Label']     # 带标签的特征
         # 常量
 
     ################################################################################################################
@@ -209,12 +215,15 @@ class DataUtils:
         :return:
         """
         logging.info('Capture info extracting ...')
+
+        # 变量定义 ################################################################################################
         column = self.columnPcapInfo
         capture = self.import_capture(filepath=filepath, keep_packets=False)
         pgb = bar.ProgressBar()
         info_list = []
         i = [0]
 
+        # 函数定义 ################################################################################################
         def ip2int(ip: str):
             return sum([256 ** m * int(n) for m, n in enumerate(ip.split('.')[::1])])
 
@@ -243,7 +252,10 @@ class DataUtils:
             i[0] += 1
             pgb.update(i[0])
 
+        # 功能实现 ################################################################################################
         capture.apply_on_packets(get_packet_info)
+
+        # 结果处理 ################################################################################################
         print('\n')
         if print_on:
             print(info_list)
@@ -252,13 +264,13 @@ class DataUtils:
             info_df.to_csv(path_or_buf=output_path, index=False)
         return info_list
 
-    def extract_cap_stm_info(self, filepath: str, filter: str, output_path: str, print_on=False, to_csv_on=True):
+    def extract_cap_stm_info(self, filepath: str, output_path: str, type_capture='wifi', print_on=False, to_csv_on=True):
         """
         提取抓包业务流信息（HTTP上行报文）
 
         :param filepath:
-        :param filter:
         :param output_path:
+        :param type_capture:
         :param print_on:
         :param to_csv_on:
         :return:
@@ -266,13 +278,17 @@ class DataUtils:
         logging.info('Capture stream info extracting ...')
 
         # 变量定义 ################################################################
-        cap_filter = 'ip.src == 192.168.137.160 && http'
         capture = FileCapture(input_file=filepath,
-                              display_filter=filter,
+                              display_filter='tcp && ip.dst == 192.168.137.160',
                               only_summaries=False,
                               keep_packets=False,
                               use_json=True)
-        column = ['Source', 'Destination', 'ID&Fragment', 'Protocol', 'Sniff_Timestamp']
+        capture_http = FileCapture(input_file=filepath,
+                                   display_filter='http && ip.src == 192.168.137.160',
+                                   only_summaries=False,
+                                   keep_packets=False,
+                                   use_json=True)
+        column = []
         info_list = []
         pgb = bar.ProgressBar()
         i = [0]
@@ -285,27 +301,106 @@ class DataUtils:
             return '0x' + ipid[-4:] + flags[-2:] + flags[-4:-2]
 
         def get_packet_info(packet):
+            if 'wlan_aggregate' in dir(packet):
+                if isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], dict):
+                    a_msdu_subframe = [packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']]
+                elif isinstance(packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe'], list):
+                    a_msdu_subframe = packet.wlan_aggregate._all_fields['wlan_aggregate.a_mdsu.subframe']
+                else:
+                    logging.error('wlan_aggregate error: %d', i[0])
+                    return
+                for subframe in a_msdu_subframe:
+                    if 'ip' in subframe:
+                        info = [ip2int(subframe['ip']['ip.src']),
+                                ip2int(subframe['ip']['ip.dst']),
+                                combine_id_flags(subframe['ip']['ip.id'], subframe['ip']['ip.flags']),
+                                int(subframe['ip']['ip.proto']),
+                                int(subframe['wlan_aggregate.a_mdsu.length']),
+                                int(packet.wlan.fc_tree.flags_tree.retry),
+                                float(packet.sniff_timestamp)]
+                        info_list.append(info)
+            i[0] += 1
+            pgb.update(i[0])
+
+        def get_wan_packet_info(packet):
             if 'ip' in packet:
                 info = [ip2int(packet.ip.src),
                         ip2int(packet.ip.dst),
                         combine_id_flags(packet.ip.id, packet.ip.flags),
-                        packet.ip.proto,
-                        packet.sniff_timestamp]
+                        int(packet.ip.proto),
+                        int(packet.length),
+                        float(packet.sniff_timestamp)]
                 info_list.append(info)
-            else:
-                info_list.append([-1, -1, -1, -1, -1])
+            # else:
+            #     info_list.append([-1, -1, -1, -1, -1])
             i[0] += 1
             pgb.update(i[0])
 
         # 功能实现 ################################################################
-        capture.apply_on_packets(get_packet_info)
+        # 提取报文
+        if type_capture == 'wifi':
+            column = self.cFileCapInfo
+            iLen = 4
+            iSnt = 6
+            capture_http.apply_on_packets(get_packet_info)  # 提取HTTP上行报文
+            http_list = info_list
+            info_list = []
+            capture.apply_on_packets(get_packet_info)       # 提取下行报文
+        elif type_capture == 'wan':
+            column = self.cFileWanStmInfo
+            iLen = 4
+            iSnt = 5
+            capture_http.apply_on_packets(get_wan_packet_info)  # 提取HTTP上行报文
+            http_list = info_list
+            info_list = []
+            capture.apply_on_packets(get_wan_packet_info)       # 提取下行报文
+        else:
+            logging.error('Invalid capture type')
+            return
+        # 筛选流报文
+        info_list = pd.DataFrame(data=info_list, columns=column)
+        src_flt = info_list['Source'].value_counts().idxmax()
+        info_list = self.filter(filepath_or_dataframe=info_list, key='Source', value=src_flt).values.tolist()
+        http_list = pd.DataFrame(data=http_list, columns=column)
+        http_list = self.filter(filepath_or_dataframe=http_list, key='Destination', value=src_flt).values.tolist()
+        df = pd.DataFrame(data=info_list, columns=column)
+        df.to_csv(path_or_buf=os.path.join(os.path.dirname(filepath), 'capture_info_wan'), index=False)
+        df = pd.DataFrame(data=http_list, columns=column)
+        df.to_csv(path_or_buf=os.path.join(os.path.dirname(filepath), 'capture_info_wan_http'), index=False)
+        # http_list = pd.read_csv(filepath_or_buffer=os.path.join(os.path.dirname(filepath), 'capture_info_wan_http')).values.tolist()
+        # info_list = pd.read_csv(filepath_or_buffer=os.path.join(os.path.dirname(filepath), 'capture_info_wan')).values.tolist()
+        # 统计流信息
+        column_out = column + ['Number', 'SumLength', 'TimeInterval', 'PacketRate', 'DataRate']
+        iInfo = 0
+        for i in range(len(info_list)):
+            if info_list[i][iSnt] >= http_list[0][iSnt]:
+                iInfo = i
+                break
+        num = 0
+        sumLen = 0
+        iHttp = 0
+        tHttp = http_list[iHttp][iSnt]
+        for i in bar.progressbar(range(iInfo, len(info_list))):
+            if iHttp >= len(http_list) - 1:
+                num += 1
+                sumLen += info_list[i][iLen]
+            elif info_list[i][iSnt] >= http_list[iHttp + 1][iSnt]:
+                num = 1
+                sumLen = info_list[i][iLen]
+                iHttp += 1
+                tHttp = http_list[iHttp][iSnt]
+            else:
+                num += 1
+                sumLen += info_list[i][iLen]
+            tInterval = info_list[i][iSnt] - tHttp
+            info_list[i].extend([num, sumLen, tInterval, num / tInterval, sumLen / tInterval])
 
         # 结果处理 ################################################################
         if print_on:
             print(info_list)
         if to_csv_on:
-            info_df = pd.DataFrame(data=info_list, columns=column)
-            info_df.to_csv(path_or_buf=output_path, index=False)
+            info_df = pd.DataFrame(data=info_list[iInfo:], columns=column_out)
+            info_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return info_list
 
     def combine_pkt_data(self, path_ap_pkt_data: str, path_cap_info: str, print_on=False, to_csv_on=True):
@@ -322,37 +417,28 @@ class DataUtils:
 
         # 变量定义 ################################################
         column = self.cFilePktData
-        obj_curr = [None] * len(column)
-        data_res = [obj_curr]
-        data_ap_df = pd.read_csv(filepath_or_buffer=path_ap_pkt_data)
-        data_ap = data_ap_df.values.tolist()
-        data_cap_df = pd.read_csv(filepath_or_buffer=path_cap_info)
-        data_cap_df['Read'] = data_cap_df['Retry'] * 0
-        data_cap_df['Index'] = data_cap_df['Retry'] * 0
-        data_cap = data_cap_df.values.tolist()
-        len_data_ap = len(data_ap)
-        len_data_cap = len(data_cap)
-        iApSrc = data_ap_df.columns.tolist().index('Source')        # 0
-        iApDst = data_ap_df.columns.tolist().index('Destination')   # 1
-        iApIdf = data_ap_df.columns.tolist().index('ID&Fragment')   # 2
-        iApPrt = data_ap_df.columns.tolist().index('Protocol')      # 3
-        iApT0 = data_ap_df.columns.tolist().index('T0')             # 4
-        iApT1 = data_ap_df.columns.tolist().index('T1')             # 5
-        iApT2 = data_ap_df.columns.tolist().index('T2')             # 6
+        data_ap = pd.read_csv(filepath_or_buffer=path_ap_pkt_data)
+        data_cap = pd.read_csv(filepath_or_buffer=path_cap_info)
+        data_cap['Read'] = data_cap['Retry'] * 0
+        data_cap['Index'] = data_cap['Retry'] * 0
+        iApSrc = data_ap.columns.tolist().index('Source')        # 0
+        iApDst = data_ap.columns.tolist().index('Destination')   # 1
+        iApIdf = data_ap.columns.tolist().index('ID&Fragment')   # 2
+        iApPrt = data_ap.columns.tolist().index('Protocol')      # 3
+        iApT0 = data_ap.columns.tolist().index('T0')             # 4
+        iApT1 = data_ap.columns.tolist().index('T1')             # 5
+        iApT2 = data_ap.columns.tolist().index('T2')             # 6
         iApPkgIdEnd = iApPrt + 1
-        iApEnd = iApT2 + 1
-        iCapSrc = data_cap_df.columns.tolist().index('Source')              # 0
-        iCapDst = data_cap_df.columns.tolist().index('Destination')         # 1
-        iCapIdf = data_cap_df.columns.tolist().index('ID&Fragment')         # 2
-        iCapPrt = data_cap_df.columns.tolist().index('Protocol')            # 3
-        iCapLen = data_cap_df.columns.tolist().index('Length')              # 4
-        iCapRty = data_cap_df.columns.tolist().index('Retry')               # 5
-        iCapSts = data_cap_df.columns.tolist().index('Sniff_Timestamp')     # 6
-        iCapRd = data_cap_df.columns.tolist().index('Read')                 # 7
-        iCapIdx = data_cap_df.columns.tolist().index('Index')               # 8
+        iCapSrc = data_cap.columns.tolist().index('Source')              # 0
+        iCapDst = data_cap.columns.tolist().index('Destination')         # 1
+        iCapIdf = data_cap.columns.tolist().index('ID&Fragment')         # 2
+        iCapPrt = data_cap.columns.tolist().index('Protocol')            # 3
+        iCapLen = data_cap.columns.tolist().index('Length')              # 4
+        iCapRty = data_cap.columns.tolist().index('Retry')               # 5
+        iCapSts = data_cap.columns.tolist().index('Sniff_Timestamp')     # 6
+        iCapRd = data_cap.columns.tolist().index('Read')                 # 7
+        iCapIdx = data_cap.columns.tolist().index('Index')               # 8
         iCapPkgIdEnd = iCapPrt + 1
-        iCapPkgDataEnd = iCapRty + 1
-        iCapEnd = iCapIdx + 1
         oSrc = column.index('Source')       # 0
         oDst = column.index('Destination')  # 1
         oIdf = column.index('ID&Fragment')  # 2
@@ -363,18 +449,20 @@ class DataUtils:
         oLen = column.index('Length')       # 7
         oRty = column.index('Retry')        # 8
         oPkgIdEnd = oPrt + 1
-        oApPkgDataEnd = oT2 + 1
-        oEnd = oRty + 1
+        data_ap = data_ap.values.tolist()
+        data_cap = data_cap.values.tolist()
+        len_data_ap = len(data_ap)
+        len_data_cap = len(data_cap)
         idxApBgn = 0    # AP端搜索起始索引
         idxCapBgn = 0   # 抓包端搜索起始索引
 
         # 功能实现 ################################################
         while idxApBgn < len_data_ap and data_ap[idxApBgn][iApPrt] != 6:
+            data_ap[idxApBgn].extend([None, None])
             idxApBgn += 1
         while idxCapBgn < len_data_cap and not (data_ap[idxApBgn][iApSrc:iApPkgIdEnd] == data_cap[idxCapBgn][iCapSrc:iCapPkgIdEnd]):
             idxCapBgn += 1
-        for i in bar.progressbar(range(len_data_ap)):
-            obj_curr[oSrc:oApPkgDataEnd] = data_ap[i][iApSrc:iApEnd]
+        for i in bar.progressbar(range(idxApBgn, len_data_ap)):
             flag = True
             for j in range(idxCapBgn, len_data_cap):
                 if data_cap[j][iCapRd] == 0:
@@ -383,35 +471,95 @@ class DataUtils:
                         flag = False
                     if data_ap[i][iApSrc:iApPkgIdEnd] == data_cap[j][iCapSrc:iCapPkgIdEnd]:
                         if not -15 < data_cap[j][iCapSts] - data_ap[i][iApT0] < 15:
-                            obj_curr = [None] * len(column)
+                            data_ap[i].extend([None, None])
                             break
-                        obj_curr[oLen:oEnd] = data_cap[j][iCapLen:iCapPkgDataEnd]
+                        data_ap[i].extend([data_cap[j][iCapLen], data_cap[j][iCapRty]])
                         data_cap[j][iCapRd] = 1
                         data_cap[j][iCapIdx] = i
                         dj = 0
+                        nRty = 1
                         while dj < 20 and j + dj + 1 < len_data_cap:
                             dj += 1
                             if data_cap[j+dj][iCapRd] == 0 and (data_ap[i][iApSrc:iApPkgIdEnd] == data_cap[j+dj][iCapSrc:iCapPkgIdEnd]):
-                                obj_curr[oRty] += data_cap[j+dj][iCapRty]
+                                nRty += 1
                                 data_cap[j+dj][iCapRd] = 1
                                 data_cap[j+dj][iCapIdx] = i
                                 j = j + dj
                                 dj = 0
-                        data_res.append(obj_curr)
-                        obj_curr = [None] * len(column)
+                        data_ap[i][oRty] = nRty
                         break
-        index_df = pd.DataFrame(data=data_res, columns=column)
-        data_cap_df = pd.DataFrame(data=data_cap)
+        data_ap = pd.DataFrame(data=data_ap, columns=column)
+        data_cap = pd.DataFrame(data=data_cap)
 
         # 结果处理 ################################################
         if print_on:
-            print(index_df)
+            print(data_ap)
         if to_csv_on:
             output_path = os.path.join(os.path.dirname(path_ap_pkt_data), 'rawdata')
-            index_df.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+            data_ap.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
             output_path = os.path.join(os.path.dirname(path_cap_info), 'capture_info_read')
-            data_cap_df.to_csv(path_or_buf=output_path, index=False)
-        return index_df
+            data_cap.to_csv(path_or_buf=output_path, index=False)
+        return data_ap
+
+    def combine_stm_index(self, path_index: str, path_stm_info: str, print_on=False, to_csv_on=True):
+        """
+        合并流信息
+
+        :param path_index:
+        :param path_stm_info:
+        :param print_on:
+        :param to_csv_on:
+        :return:
+        """
+        logging.info('Stream features combining ...')
+
+        # 变量定义 ###########################################################################################
+        column = self.cFileFeature
+        lcFeat = pd.read_csv(filepath_or_buffer=path_index)
+        stmInfo = pd.read_csv(filepath_or_buffer=path_stm_info)
+        stmInfo['Read'] = stmInfo['Source'] * 0
+        iLcT0 = lcFeat.columns.tolist().index('T0')
+        iStmSts = stmInfo.columns.tolist().index('Sniff_Timestamp')
+        iStmPktRate = stmInfo.columns.tolist().index('PacketRate')
+        iStmDataRate = stmInfo.columns.tolist().index('DataRate')
+        iStmRead = stmInfo.columns.tolist().index('Read')
+        lcFeat = lcFeat.values.tolist()
+        stmInfo = stmInfo.values.tolist()
+        lenLcFeat = len(lcFeat)
+        lenStmInfo = len(stmInfo)
+        iLcFeatBgn = 0
+        iStmInfoBgn = 0
+
+        # 功能实现 ###########################################################################################
+        while iStmInfoBgn < lenStmInfo and not (lcFeat[iLcFeatBgn][0:4] == stmInfo[iStmInfoBgn][0:4]):
+            iStmInfoBgn += 1
+        for i in bar.progressbar(range(iLcFeatBgn, lenLcFeat)):
+            flag = True
+            for j in range(iStmInfoBgn, lenStmInfo):
+                if stmInfo[j][iStmRead] == 0:
+                    if flag:
+                        iStmInfoBgn = j
+                        flag = False
+                    if lcFeat[i][0:4] == stmInfo[j][0:4]:
+                        if not -15 < stmInfo[j][iStmSts] - lcFeat[i][iLcT0] < 15:
+                            lcFeat[i].extend([None, None])
+                        else:
+                            lcFeat[i].extend([stmInfo[j][iStmPktRate], stmInfo[j][iStmDataRate]])
+                            stmInfo[j][iStmRead] = 1
+                        break
+        lcFeat = pd.DataFrame(data=lcFeat, columns=column)
+        stmInfo = pd.DataFrame(data=stmInfo)
+        lcFeat = lcFeat.dropna()
+
+        # 结果处理 ###########################################################################################
+        if print_on:
+            print(lcFeat)
+        if to_csv_on:
+            output_path = os.path.join(os.path.dirname(path_index), 'feature')
+            lcFeat.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
+            output_path = os.path.join(os.path.dirname(path_stm_info), 'capture_info_wan_stream_read')
+            stmInfo.to_csv(path_or_buf=output_path, index=False)
+        return lcFeat
 
     ################################################################################################################
     # 数据预处理
@@ -608,8 +756,8 @@ class DataUtils:
         # 变量定义 ###################################################
         region = self.region
         apTsp = self.cApTimestamp
-        pktIndex = self.cPktIndex
-        column = self.cFileIndex
+        pktIndex = self.cPktFeature
+        column = self.cFileLcFeature
         len_data = len(data)
 
         # 功能实现 ###################################################
@@ -667,12 +815,13 @@ class DataUtils:
 
     ################################################################################################################
     # 数据标注
-    def set_label(self, path_index: str, path_timestamp: str, print_on=False, to_csv_on=True):
+    def set_label(self, path_index: str, path_timestamp: str, filename='index_label', print_on=False, to_csv_on=True):
         """
         设置标签
 
         :param path_index: 特征数据文件路径
         :param path_timestamp: 异常时间戳文件路径
+        :param filename: 输出文件名
         :param print_on: 是否打印结果
         :param to_csv_on: 是否输出csv文件
         :return:
@@ -701,7 +850,7 @@ class DataUtils:
         if print_on:
             print(index)
         if to_csv_on:
-            output_path = os.path.join(os.path.dirname(path_index), 'index_label')
+            output_path = os.path.join(os.path.dirname(path_index), filename)
             index.to_csv(path_or_buf=output_path, index=False, float_format="%.6f")
         return index
 

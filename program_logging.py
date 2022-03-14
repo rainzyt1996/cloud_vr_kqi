@@ -9,4 +9,6 @@
 
 import logging
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s %(filename)s[line:%(lineno)d]: (%(levelname)s) %(message)s')
+                    format='%(asctime)s (%(levelname)s): %(message)s')
+logging.basicConfig(level=logging.ERROR,
+                    format='%(asctime)s (%(levelname)s): [%(filename)s(line:%(lineno)d)] %(message)s')
